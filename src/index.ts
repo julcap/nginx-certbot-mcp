@@ -16,30 +16,36 @@ const server = new McpServer({
 
 // --- Read-only tools (fully implemented) ---
 
-server.tool(
+server.registerTool(
   "list_sites",
-  "List all configured nginx server blocks with domain, upstream, and SSL status.",
-  {},
+  {
+    description: "List all configured nginx server blocks with domain, upstream, and SSL status.",
+    inputSchema: {},
+  },
   async () => {
     const sites = await listSites();
     return { content: [{ type: "text", text: JSON.stringify(sites, null, 2) }] };
   }
 );
 
-server.tool(
+server.registerTool(
   "get_site_config",
-  "Get the raw nginx config for a specific domain.",
-  { domain: z.string().describe("The domain to look up, e.g. my.domain.com") },
+  {
+    description: "Get the raw nginx config for a specific domain.",
+    inputSchema: { domain: z.string().describe("The domain to look up, e.g. my.domain.com") },
+  },
   async ({ domain }) => {
     const result = await getSiteConfig(domain);
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   }
 );
 
-server.tool(
+server.registerTool(
   "check_cert_expiry",
-  "List certbot-managed certificates and days until expiry.",
-  {},
+  {
+    description: "List certbot-managed certificates and days until expiry.",
+    inputSchema: {},
+  },
   async () => {
     const certs = await checkCertExpiry();
     return { content: [{ type: "text", text: JSON.stringify(certs, null, 2) }] };
@@ -48,14 +54,17 @@ server.tool(
 
 // --- Mutating tools (guardrails wired, shell calls stubbed - see TODOs) ---
 
-server.tool(
+server.registerTool(
   "create_server_block",
-  "Create a new nginx server block from the websocket-capable default template. " +
-    "Validates and test-renders before touching live config.",
   {
-    domain: z.string(),
-    upstream_host: z.string(),
-    upstream_port: z.number().int().min(1).max(65535),
+    description:
+      "Create a new nginx server block from the websocket-capable default template. " +
+      "Validates and test-renders before touching live config.",
+    inputSchema: {
+      domain: z.string(),
+      upstream_host: z.string(),
+      upstream_port: z.number().int().min(1).max(65535),
+    },
   },
   async ({ domain, upstream_host, upstream_port }) => {
     const result = await createServerBlock({ domain, upstream_host, upstream_port });
@@ -63,24 +72,29 @@ server.tool(
   }
 );
 
-server.tool(
+server.registerTool(
   "reload_nginx",
-  "Run `nginx -t` and reload only if the config test passes.",
-  {},
+  {
+    description: "Run `nginx -t` and reload only if the config test passes.",
+    inputSchema: {},
+  },
   async () => {
     const result = await reloadNginx();
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   }
 );
 
-server.tool(
+server.registerTool(
   "issue_cert",
-  "Request a certificate via `certbot --nginx`. Defaults to Let's Encrypt staging - " +
-    "pass staging:false only when you mean it.",
   {
-    domain: z.string(),
-    staging: z.boolean().default(true),
-    email: z.string().optional(),
+    description:
+      "Request a certificate via `certbot --nginx`. Defaults to Let's Encrypt staging - " +
+      "pass staging:false only when you mean it.",
+    inputSchema: {
+      domain: z.string(),
+      staging: z.boolean().default(true),
+      email: z.string().optional(),
+    },
   },
   async ({ domain, staging, email }) => {
     const result = await issueCert({ domain, staging, email });
