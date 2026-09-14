@@ -12,7 +12,7 @@ export interface CertStatus {
 
 // `certbot certificates` is a read-only command - safe to run without confirmation.
 export async function checkCertExpiry(): Promise<CertStatus[]> {
-  const { stdout } = await execFileAsync("certbot", ["certificates"]);
+  const { stdout } = await execFileAsync("sudo", ["certbot", "certificates"]);
   return parseCertbotOutput(stdout);
 }
 
