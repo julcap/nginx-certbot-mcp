@@ -10,7 +10,7 @@ export interface ReloadResult {
 
 export async function reloadNginx(): Promise<ReloadResult> {
   try {
-    const test = await execFileAsync("nginx", ["-t"]);
+    const test = await execFileAsync("sudo", ["nginx","-t"]);
     // Test passed - safe to reload.
     // TODO: this needs the process to have permission to run this without a password
     // prompt. Add a narrow sudoers entry, e.g.:
