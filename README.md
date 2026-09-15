@@ -17,9 +17,6 @@ certs via certbot. See `../nginx-mcp-tool-spec.md` for the full design.
 | `remove_site` | ⬜ not started                                                                                         |
 | `renew_cert` | ⬜ not started                                                                                         |
 
-The read-only tools are real and safe to run against your actual nginx setup
-right now. The mutating ones are intentionally left as guarded stubs — finish
-the TODOs once you've reviewed the guardrail logic and are comfortable with it.
 
 ## Setup
 
