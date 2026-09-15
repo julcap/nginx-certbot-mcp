@@ -2,40 +2,44 @@
 
 Let AI agents manage production web infrastructure without giving them root shell access.
 
-nginx-certbot-mcp is a safety-first MCP server for provisioning Nginx reverse proxies, DNS records and Let's Encrypt certificates through narrowly scoped, auditable operations.
-
-Instead of exposing arbitrary shell commands, privileged actions are restricted through purpose-built wrappers and least-privilege sudo rules.
+nginx-certbot-mcp provisions Nginx reverse proxies, DNS records, and Let's
+Encrypt certificates through narrowly scoped, auditable MCP tools — never
+arbitrary shell commands. Privileged actions go through purpose-built
+wrappers and least-privilege sudo rules (see [Why a wrapper
+script](#why-a-wrapper-script-instead-of-sudo-on-teelnrm) below).
 
 ## Architecture
 
 ![nginx-certbot-mcp architecture](docs/architecture.png)
 
-## Status
+## Tools
 
-| Tool | Status                                                                                                 |
-|---|--------------------------------------------------------------------------------------------------------|
-| `list_sites` | ✅ implemented                                                                                         |
-| `get_site_config` | ✅ implemented                                                                                         |
-| `check_cert_expiry` | ✅ implemented                                                                                         |
-| `check_dns` | ✅ implemented — resolves CNAME, then A/AAAA                                                           |
-| `check_upstream_health` | ✅ implemented — TCP probe of host:port                                                                |
-| `get_nginx_status` | ✅ implemented — running state (via sudo, doesn't depend on dbus) + version                            |
-| `tail_site_logs` | ✅ implemented — access/error log tail, capped at 1000 lines; `domain` filter is best-effort           |
-| `list_archived_sites` | ✅ implemented                                                                                         |
-| `create_domain_record` | ✅ implemented — Route 53 CNAME via UPSERT                                                             |
-| `delete_domain_record` | ✅ implemented — Route 53 CNAME delete; requires `confirm:true`                                        |
-| `create_txt_record` | ✅ implemented — Route 53 TXT via UPSERT, e.g. for ACME DNS-01                                         |
-| `create_site` | ✅ implemented — writes/tests/enables via the `nginx-mcp-writesite` wrapper (see Required permissions) |
-| `delete_site` | ✅ implemented — disables, archives to `sites-archived`, then deletes; requires `confirm:true`         |
-| `restore_site` | ✅ implemented — re-enables from the newest (or a chosen) archive; requires `confirm:true`             |
-| `prune_archives` | ✅ implemented — deletes archives older than N days; requires `confirm:true`                           |
-| `reload_nginx` | ✅ implemented                                                           |
-| `issue_cert` | ✅ implemented — defaults to LE staging, includes a DNS pre-check                              |
-| `issue_wildcard_cert` | 🚧 partly implemented — needs certbot-dns-route53 installed on the box (see Required permissions)     |
-| `renew_cert` | ✅ implemented — `certbot renew`, defaults to `--dry-run`                                              |
-| `revoke_cert` | ✅ implemented — leaves cert files on disk; requires `confirm:true`                                    |
-| `delete_cert` | ✅ implemented — removes cert files from certbot's store; requires `confirm:true`                      |
+All 21 are implemented and exercised against real infrastructure — see
+[Testing](#testing).
 
+| Tool | Description |
+|---|---|
+| `list_sites` | List configured nginx server blocks with domain, upstream, and SSL status |
+| `get_site_config` | Raw nginx config for one domain |
+| `check_cert_expiry` | List certbot-managed certs and days until expiry |
+| `check_dns` | Resolve a domain (CNAME, then A/AAAA) against public resolvers |
+| `check_upstream_health` | TCP probe of an upstream `host:port` |
+| `get_nginx_status` | Whether nginx is running, plus its version |
+| `tail_site_logs` | Tail access/error logs, capped at 1000 lines |
+| `list_archived_sites` | List configs archived by `delete_site` |
+| `create_domain_record` | Upsert a Route 53 CNAME |
+| `delete_domain_record` | Delete a Route 53 CNAME — `confirm:true` |
+| `create_txt_record` | Upsert a Route 53 TXT record, e.g. for ACME DNS-01 |
+| `create_site` | Create a websocket-capable nginx server block from the default template |
+| `delete_site` | Disable, archive, and delete a server block — `confirm:true` |
+| `restore_site` | Re-enable a site from its newest (or a chosen) archive — `confirm:true` |
+| `prune_archives` | Delete archives older than N days — `confirm:true` |
+| `reload_nginx` | `nginx -t`, then reload only if it passes |
+| `issue_cert` | Issue via HTTP-01 (`certbot --nginx`) — defaults to LE staging |
+| `issue_wildcard_cert` | Issue `domain` + `*.domain` via DNS-01 (`certbot --dns-route53`) — defaults to LE staging |
+| `renew_cert` | `certbot renew` — defaults to `--dry-run` |
+| `revoke_cert` | Revoke with Let's Encrypt, leaving the files in place — `confirm:true` |
+| `delete_cert` | Remove a cert's files from certbot's store — `confirm:true` |
 
 ## Setup
 
@@ -45,67 +49,73 @@ npm run build
 npm run setup -- mcpuser
 ```
 
+Run the server as a dedicated non-root user (e.g. `mcpuser`) — never as
+root. `npm run setup -- <user>` (`scripts/setup.sh`) grants that user
+exactly the privileges below, nothing more, and is idempotent: safe to
+re-run any time, including after changing the username or pulling an
+update that adds a new allowed command.
+
 ## Required permissions
 
-Run this server as a dedicated non-root user (e.g. `mcpuser`) — do NOT run
-the whole server as root.
-
-Set up permissions with:
-
-```bash
-npm run build
-npm run setup -- mcpuser
-```
-This installs two things:
+`npm run setup -- <user>` installs two things:
 
 1. **`/usr/local/bin/nginx-mcp-writesite`** — a narrow wrapper script that
-   only accepts `{write|enable|disable|remove|archive|restore|remove-archive} <domain>`
-   or `log {access|error} <lines>`, and only ever touches paths under
-   `/etc/nginx/sites-available/`, `/etc/nginx/sites-enabled/`,
+   only accepts `{write|enable|disable|remove|archive|restore|remove-archive}
+   <domain>` or `log {access|error} <lines>`, and only ever touches paths
+   under `/etc/nginx/sites-available/`, `/etc/nginx/sites-enabled/`,
    `/etc/nginx/sites-archived/`, and the two fixed nginx log files. It
-   re-validates the domain (and, for `restore`/`remove-archive`, the archive
-   filename) itself, independent of the Node-side validation.
-2. **`/etc/sudoers.d/nginx-mcp`** — grants `mcpuser` passwordless sudo on
-   exactly: `nginx -t`, `systemctl reload nginx`, `systemctl is-active
-   --quiet nginx`, `certbot`, and the wrapper script above. Nothing
-   broader. It also keeps `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/
+   re-validates the domain (and, for `restore`/`remove-archive`, the
+   archive filename) itself, independent of the Node-side validation.
+2. **`/etc/sudoers.d/nginx-mcp`** — grants `<user>` passwordless sudo on
+   exactly `nginx -t`, `systemctl reload nginx`, `systemctl is-active
+   --quiet nginx`, `certbot`, and the wrapper above. Nothing broader. It
+   also keeps `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/
    `AWS_DEFAULT_REGION` through sudo (which strips the environment by
    default) so `certbot --dns-route53` can see them for
-   `issue_wildcard_cert` — no other environment variables are preserved.
+   `issue_wildcard_cert`.
 
-`issue_wildcard_cert` additionally needs the `certbot-dns-route53` plugin
-installed on the box (e.g. `apt install python3-certbot-dns-route53`) —
-this repo doesn't install it for you.
+`issue_wildcard_cert` also needs the `certbot-dns-route53` plugin —
+`npm run install:deps` installs it for you (see [Testing](#testing)).
+
+## Why a wrapper script instead of sudo on tee/ln/rm
+
+An earlier version granted sudo on generic file tools (`tee`, `ln`, `rm`)
+so `create_site` could write into `/etc/nginx/`. That works, but it's a
+wider trust boundary than the task needs: those commands can touch *any*
+root-owned file on the box, not just nginx configs. If the MCP server
+process were ever compromised or triggered unexpectedly, the blast radius
+would be the whole filesystem.
+
+The wrapper narrows that to one purpose-built binary that can only act on
+nginx site configs, one archive at a time, or tail one of two fixed log
+files — nothing else. The trade-off is one more artifact to deploy and
+keep in sync with the server, in exchange for sudo that can only ever do
+what this project needs.
 
 ## Network requirements for certificate issuance
 
 ![HTTP-01 and DNS-01 network requirements](docs/certificate-network-requirements.svg)
 
-`issue_cert` and `issue_wildcard_cert` validate domain ownership two
-completely different ways, with different requirements on where the box
-sits on your network:
+`issue_cert` and `issue_wildcard_cert` prove domain ownership two
+different ways, with different requirements on where the box sits on your
+network:
 
 - **`issue_cert` (HTTP-01)** — Let's Encrypt makes an inbound HTTP request
-  to the domain on port 80. That request goes to whatever your DNS resolves
-  the domain to (its public IP), and if you're behind a home/office router
-  doing NAT, the router then forwards it to **exactly one** private IP per
-  port-forwarding rule. This means: the machine running nginx (and this MCP
-  server) has to be the *specific* private IP your router forwards 80/443
-  to — not just any machine on your network, and not the Docker sandbox
-  (which sits at its own, different private IP on the Docker bridge
-  network). If you run multiple boxes/VMs behind one router, double-check
-  which one the port-forwarding rule actually targets before calling
-  `issue_cert` from it; calling it from the wrong box fails every time,
-  since the challenge request never reaches it.
-- **`issue_wildcard_cert` (DNS-01)** — validates by having `certbot-dns-route53`
-  create a TXT record in Route 53 for Let's Encrypt to look up. This is
-  outbound-only (the box calls the AWS API; nothing calls back in), so it
-  has no port-forwarding requirement at all and works identically from any
-  network, including the Docker sandbox.
+  to the domain on port 80. If you're behind a home/office router doing
+  NAT, that request lands on whichever **one** private IP your
+  port-forwarding rule targets. The machine running nginx (and this MCP
+  server) has to be that exact machine — not just any box on your network,
+  and not the Docker sandbox (a different private IP on the Docker bridge
+  network). Calling it from the wrong box fails every time, since the
+  challenge request never arrives.
+- **`issue_wildcard_cert` (DNS-01)** — validates via a TXT record
+  `certbot-dns-route53` creates in Route 53. This is outbound-only (the
+  box calls the AWS API; nothing calls back in), so it has no
+  port-forwarding requirement and works identically from any network,
+  including the Docker sandbox.
 
-Either way, the domain's DNS still has to actually point at your public IP
-(`create_domain_record` handles that part) - DNS pointing correctly and
-port-forwarding pointing correctly are two separate requirements, and
+Either way, DNS still has to point at your public IP (`create_domain_record`
+handles that) — DNS and port-forwarding are two separate requirements, and
 `issue_cert` needs both.
 
 ## Environment variables
@@ -114,158 +124,100 @@ port-forwarding pointing correctly are two separate requirements, and
 |---|---|---|
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | `create_domain_record`, `delete_domain_record`, `create_txt_record`, `issue_wildcard_cert` | Credentials for a Route-53-scoped IAM user — no other AWS permissions needed |
 | `ROUTE53_HOSTED_ZONE_ID` | `create_domain_record`, `delete_domain_record`, `create_txt_record` | Find with `aws route53 list-hosted-zones-by-name --dns-name julcap.net` |
-| `AWS_DEFAULT_REGION` | `create_domain_record`, `delete_domain_record`, `create_txt_record`, `issue_wildcard_cert` | Optional — Route 53 is global, but the AWS SDK/boto3 still need a signing region; defaults to `us-east-1` if unset |
+| `AWS_DEFAULT_REGION` | Same as above, plus `issue_wildcard_cert` | Optional — Route 53 is global, but the AWS SDK/boto3 still need a signing region; defaults to `us-east-1` |
 
-## Why a wrapper script instead of sudo on tee/ln/rm
-
-An earlier version of this granted sudo on generic file tools (`tee`, `ln`,
-`rm`) so `create_site` could write into `/etc/nginx/`. That works,
-but it's a wider trust boundary than the task needs — those commands can
-touch *any* root-owned file on the box, not just nginx site configs. If the
-MCP server process were ever compromised or triggered unexpectedly, the
-blast radius would be the whole filesystem.
-
-The wrapper script narrows that: sudo is scoped to one purpose-built binary
-that can only write, enable, disable, remove, archive, or restore a single
-named site config, prune one named archive, or tail one of the two fixed
-nginx log files — nothing else. The trade-off is one more artifact to
-deploy and keep in sync with the server, in exchange for sudo that can only
-ever do the things this project needs.
-
-Both installer scripts (`scripts/install.sh`, `scripts/install-sudoers.sh`)
-are idempotent — safe to re-run `npm run setup -- mcpuser` any time,
-including after you change the username or add a new allowed command.
-
-## Testing safely
+## Testing
 
 Four layers, from "needs almost nothing" to "exercises everything":
 
-### 1. Check/install dependencies
+### 1. Dependencies — `npm run install:deps`
 
-```bash
-npm run install:deps
-```
+Debian/Ubuntu only, idempotent. Installs `nginx`, `certbot`,
+`python3-certbot-nginx`, and `python3-certbot-dns-route53` via apt if
+missing; for anything already installed, it only reports whether the
+version is current, since silently upgrading a package that might be
+serving traffic isn't this script's call to make. If `certbot` looks like
+a **snap** install (common — certbot's own docs recommend it over apt's
+often-outdated package), it also tries installing `certbot-dns-route53` as
+a snap plugin, since an apt-installed plugin can be invisible to snap
+certbot's isolated Python environment. That's best-effort and additive,
+never a replacement for the apt package, so `issue_wildcard_cert` has a
+working path either way. Also reports your Node version against the
+`>=20` that `@aws-sdk/client-route-53` will eventually require.
 
-Debian/Ubuntu only. Idempotent: installs `nginx`, `certbot`,
-`python3-certbot-nginx`, and `python3-certbot-dns-route53` (via apt) if
-missing. If `certbot` looks like a **snap** install (common - certbot's own
-docs recommend snap over apt's often-outdated package), it *also* tries
-installing `certbot-dns-route53` as a snap plugin, since an apt-installed
-plugin can be invisible to snap certbot's isolated Python environment
-(surfaces as `issue_wildcard_cert` failing with "The requested dns-route53
-plugin does not appear to be installed" even though `dpkg` thinks it's
-there). That snap install is best-effort, not a certainty (snapd might not
-be set up, or that snap might not be available) - it never replaces the apt
-package, only supplements it, so `issue_wildcard_cert` still has a working
-path either way. If packages are already installed it only reports
-whether the version is current or older than what's available — it never
-silently upgrades a package that might already be serving traffic; it
-prints the `apt-get`
-command to run yourself if you want that. Also reports your Node version
-against the >=20 that `@aws-sdk/client-route-53` will eventually require.
-
-### 2. Route 53 round-trip test
-
-```bash
-npm run test:dns
-```
+### 2. Route 53 round trip — `npm run test:dns`
 
 The only requirement is a working `ROUTE53_HOSTED_ZONE_ID` (+ AWS
-credentials) in `.env` — you don't need to already own or know a test
-subdomain, and nothing touches nginx or certbot. It discovers your zone's
-own domain name from the hosted zone, creates a disposable CNAME under a
-random subdomain (`mcp-test-<random>.<your-zone>`) pointing at the zone
-apex, verifies it directly against Route 53 (and, best-effort, via public
-DNS), then deletes it again — the cleanup runs even if a check in between
-fails, so a bad run can't leave an orphaned record behind.
+credentials) in `.env`. It discovers your zone's own domain from the
+hosted zone, creates a disposable CNAME under a random subdomain, verifies
+it (directly against Route 53, and best-effort via public DNS), then
+deletes it — cleanup runs even if a check in between fails, so a bad run
+can't leave an orphaned record.
 
-### 3. Docker sandbox (real nginx + certbot, disposable)
-
-For exercising `create_site`, `reload_nginx`, `issue_cert`, etc. without
-touching a real box. The container runs systemd as PID 1 so
-`sudo systemctl reload nginx` and friends work exactly as they do in
-production — that needs `--privileged` and a cgroup mount, which
-`docker-compose.yml` already sets up:
+### 3. Docker sandbox — real nginx + certbot, disposable
 
 ```bash
-cp .env.example .env   # fill in your AWS credentials + hosted zone ID
+cp .env.example .env   # fill in AWS credentials + hosted zone ID
 docker compose up -d --build
-docker compose exec sandbox npm run inspect   # or see below for a real MCP client
+docker compose exec sandbox npm run inspect
 ```
 
-`npm run inspect` prints a URL with a session token — open it in a browser.
-It's running as `mcpuser` inside the container, with the wrapper + sudoers
-already installed by `scripts/setup.sh` during the image build, and
-`nginx`/`certbot`/the certbot plugins already installed via
-`scripts/install-deps.sh`. Tear it down with `docker compose down`; nothing
-it does persists once the container is gone (it's a fresh nginx/certbot
-install every rebuild).
+The container runs systemd as PID 1, so `sudo systemctl reload nginx` and
+friends work exactly as they do in production (needs `--privileged` and a
+cgroup mount, which `docker-compose.yml` already sets up). `nginx`/
+`certbot`/the plugins are installed via `install-deps.sh`, and the
+wrapper/sudoers via `setup.sh`, both at image build time. Tear down with
+`docker compose down` — nothing persists; every rebuild is a fresh install.
 
-### 4. Automated tool-by-tool test suite
+### 4. Automated tool-by-tool suite
 
 ```bash
-cp .env.test.example .env.test   # fill in AWS credentials + a domain you control
-npm run test:tools               # against the Docker sandbox
-npm run test:tools:host          # against this machine directly
+cp .env.test.example .env.test   # AWS credentials + a domain you control
+npm run test:tools                # against the Docker sandbox
+npm run test:tools:host           # against this machine directly
 ```
 
-Drives every registered MCP tool over the real stdio JSON-RPC protocol -
-the same way a real MCP client would - and prints ✓/✗/– per tool.
-`.env.test` is separate from `.env`: it's read on the host, and its
-credentials get injected directly into each MCP server process the runner
-spawns, so `.env` and `.env.test` never need to match.
+Drives every tool over the real stdio JSON-RPC protocol and prints
+✓/✗/– per tool. `.env.test` is separate from `.env` — read on the host and
+injected directly into each MCP server process the runner spawns, so the
+two files never need to match. Before touching anything it verifies your
+AWS credentials work and that `TEST_DOMAIN` is the zone's apex or a
+subdomain of it. Everything then runs under a random
+`mcp-test-<random>.<TEST_DOMAIN>` subdomain, self-cleans after each phase,
+and does a final best-effort cleanup regardless of pass/fail. Certificate
+issuance is opt-in — asked interactively, or pass `--certs` for a
+non-interactive run — since it hits real Let's Encrypt staging and adds a
+minute or two.
 
-Before touching anything it verifies your AWS credentials work and that
-`TEST_DOMAIN` is actually the zone's apex or a subdomain of it - refusing
-to run against a domain the hosted zone doesn't control. Everything then
-runs under a random `mcp-test-<random>.<TEST_DOMAIN>` subdomain, self-cleans
-after each phase, and does a final best-effort cleanup pass regardless of
-what passed or failed. You'll be asked once, interactively, whether to also
-exercise certificate issuance - it hits real Let's Encrypt staging and adds
-a minute or two, so it's opt-in (pass `--certs` for a non-interactive run,
-e.g. `npm run test:tools:host -- --certs`).
+The two targets differ in exactly one way, `issue_cert`:
 
-Two targets, with one real difference - `issue_cert` (HTTP-01):
+- **`npm run test:tools`** (default) runs in the Docker sandbox, which
+  isn't reachable from the internet, so `issue_cert` (HTTP-01) is always
+  skipped — the cert scenario only exercises `issue_wildcard_cert`
+  (DNS-01) and the renew/revoke/delete chain built on it.
+- **`npm run test:tools:host`** runs `node dist/index.js` directly on this
+  machine. If this is the box your router actually forwards 80/443 to,
+  the cert scenario tests `issue_cert` too (waiting up to 300s for the
+  disposable CNAME to propagate first), and the renew/revoke/delete chain
+  runs against *that* cert instead. It refuses to start unless
+  passwordless sudo already works for the current user — i.e.
+  `npm run setup -- <user>` was run for the user actually invoking it, not
+  some other account. **Everything this touches is real production
+  state**, not a sandbox.
 
-- **`npm run test:tools`** (default) - the Docker sandbox. Starts it via
-  `docker compose up -d --build` if it isn't already running (`.env` only
-  has to exist for that, and gets created blank from `.env.example`
-  automatically if missing). Disposable and self-contained, but not
-  reachable from the internet on port 80, so `issue_cert` is always
-  skipped - only `issue_wildcard_cert` (DNS-01, `renew_cert`, `revoke_cert`,
-  `delete_cert` get exercised as part of the cert scenario.
-- **`npm run test:tools:host`** - runs `node dist/index.js` directly on
-  this machine instead of in Docker. This is the only way to test
-  `issue_cert` for real, since it needs the box that's actually reachable
-  on port 80/443 (see Network requirements above) - if this is that box,
-  the cert scenario tests `issue_cert` too, waiting up to 300s (10 attempts,
-  30s apart) for the disposable CNAME to propagate before attempting it.
-  **Everything this
-  touches is real production state, not a sandbox** - real nginx config,
-  real certbot, real DNS - so treat it accordingly. It refuses to run at
-  all unless passwordless sudo already works for the user running it (i.e.
-  you've run `npm run setup -- <user>` for that user already).
+## Connecting a client
 
-`renew_cert`'s dry-run has occasionally hung past its timeout during
-development (certbot holds a global lock while it's running, and a
-client-side timeout can't kill the remote process) - if a run seems stuck,
-check for and kill any stray `certbot` process, then `docker compose down`
-(sandbox) to start clean.
-
-## Testing locally with the MCP Inspector
+**MCP Inspector** — the fastest feedback loop for poking at a tool
+directly:
 
 ```bash
 npm run inspect
 ```
 
-This opens a browser UI where you can call each tool directly and see
-raw input/output — much faster feedback loop than wiring it into Claude
-Desktop for every change. Run it against your real box, or against the
-Docker sandbox above (`docker compose exec sandbox npm run inspect`).
+Prints a URL with a session token. Run it against a real box, or the
+Docker sandbox (`docker compose exec sandbox npm run inspect`).
 
-## Testing against Claude Desktop / claude.ai
-
-Add to your MCP client config (path varies by client). Against a real box:
+**Claude Desktop / claude.ai** — add to your MCP client config:
 
 ```json
 {
@@ -278,7 +230,7 @@ Add to your MCP client config (path varies by client). Against a real box:
 }
 ```
 
-Or against the Docker sandbox, once it's running (`docker compose up -d`):
+Or against the running Docker sandbox:
 
 ```json
 {
@@ -295,35 +247,22 @@ Or against the Docker sandbox, once it's running (`docker compose up -d`):
 
 1. `create_domain_record` — point `mysite.julcap.net` at `www.julcap.net`
 2. (wait for DNS propagation)
-3. `create_site` — nginx serves the domain on port 80, reverse-proxied
-   to the local service IP:port
+3. `create_site` — nginx serves the domain on port 80, reverse-proxied to
+   the local service IP:port
 4. `reload_nginx`
-5. `issue_cert` — certbot validates via HTTP-01, updates nginx to redirect to 443
-
-## Next steps
-
-1. `npm run test:tools` is the most thorough way to validate a change - it's
-   caught real bugs already (e.g. `get_nginx_status` assuming a D-Bus
-   session that isn't guaranteed to exist). `issue_cert` (HTTP-01) is
-   always skipped since the sandbox isn't publicly reachable on port 80 by
-   default; test it manually against **staging only** first if you need to,
-   since flipping `staging:false` before you trust the flow risks burning
-   your real Let's Encrypt rate limit.
-2. `npm run test:dns` is a narrower, faster check of just the Route 53
-   round trip if you don't need the full suite.
+5. `issue_cert` — certbot validates via HTTP-01, updates nginx to redirect
+   to 443
 
 ## Contributing
 
-Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md)
-for guidelines.
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for
+guidelines.
 
 ## License
 
-nginx-certbot-mcp is source-available under the
-[Elastic License 2.0](LICENSE).
-
-You may use, modify, and redistribute the software. However, you may not
-provide a substantial portion of its functionality to third parties as a
-hosted or managed service.
+nginx-certbot-mcp is source-available under the [Elastic License
+2.0](LICENSE). You may use, modify, and redistribute the software.
+However, you may not provide a substantial portion of its functionality
+to third parties as a hosted or managed service.
 
 For commercial licensing or partnership enquiries, contact the maintainer.
