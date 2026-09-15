@@ -10,9 +10,10 @@ certs via certbot. See `../nginx-mcp-tool-spec.md` for the full design.
 | `list_sites` | ✅ implemented |
 | `get_site_config` | ✅ implemented |
 | `check_cert_expiry` | ✅ implemented |
-| `create_server_block` | 🚧 stubbed — validated + renders template, actual write/test-swap is a TODO in `src/tools/createServerBlock.ts` |
-| `reload_nginx` | 🚧 needs sudoers entry (see below) before it'll work |
-| `issue_cert` | 🚧 needs sudoers entry, defaults to LE staging |
+| `create_domain_record` | ✅ implemented — Route 53 CNAME via UPSERT |
+| `create_server_block` | ✅ implemented — writes/tests/enables via the `nginx-mcp-writesite` wrapper (see Required permissions) |
+| `reload_nginx` | ✅ implemented — needs sudoers entry below |
+| `issue_cert` | ✅ implemented — needs sudoers entry, defaults to LE staging |
 | `remove_site` | ⬜ not started |
 | `renew_cert` | ⬜ not started |
 
@@ -25,36 +26,56 @@ the TODOs once you've reviewed the guardrail logic and are comfortable with it.
 ```bash
 npm install
 npm run build
+npm run setup -- mcpuser
 ```
 
 ## Required permissions
 
-The mutating tools shell out to `nginx -t`, `systemctl reload nginx`, and
-`certbot`. Run this server as a dedicated non-root user with a narrow
-sudoers entry — do NOT run the whole server as root:
+Run this server as a dedicated non-root user (e.g. `mcpuser`) — do NOT run
+the whole server as root.
 
+Set up permissions with:
+
+```bash
+npm run build
+npm run setup -- mcpuser
 ```
-# /etc/sudoers.d/nginx-mcp
-mcpuser ALL=(root) NOPASSWD: /usr/sbin/nginx -t, /usr/bin/systemctl reload nginx, /usr/bin/certbot, /usr/local/bin/nginx-mcp-writesite
-```
+This installs two things:
+
+1. **`/usr/local/bin/nginx-mcp-writesite`** — a narrow wrapper script that
+   only accepts `{write|enable|disable|remove} <domain>` and only ever
+   touches paths under `/etc/nginx/sites-available/` and
+   `/etc/nginx/sites-enabled/`. It re-validates the domain itself,
+   independent of the Node-side validation.
+2. **`/etc/sudoers.d/nginx-mcp`** — grants `mcpuser` passwordless sudo on
+   exactly: `nginx -t`, `systemctl reload nginx`, `certbot`, and the
+   wrapper script above. Nothing broader.
+
+## Environment variables
+
+| Variable | Used by | Notes |
+|---|---|---|
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | `create_domain_record` | Credentials for a Route-53-scoped IAM user — no other AWS permissions needed |
+| `ROUTE53_HOSTED_ZONE_ID` | `create_domain_record` | Find with `aws route53 list-hosted-zones-by-name --dns-name julcap.net` |
 
 ## Why a wrapper script instead of sudo on tee/ln/rm
 
-The first pass granted passwordless sudo on generic file tools (`tee`, `ln`,
-`rm`). That works, but it's a wider trust boundary than the task needs -
-those commands can touch *any* root-owned file on the box, not just nginx
-site configs. If the MCP server process were ever compromised or triggered
-unexpectedly, the blast radius would be the whole filesystem.
+An earlier version of this granted sudo on generic file tools (`tee`, `ln`,
+`rm`) so `create_server_block` could write into `/etc/nginx/`. That works,
+but it's a wider trust boundary than the task needs — those commands can
+touch *any* root-owned file on the box, not just nginx site configs. If the
+MCP server process were ever compromised or triggered unexpectedly, the
+blast radius would be the whole filesystem.
 
-Instead, sudo is scoped to a single purpose-built script
-(`/usr/local/bin/nginx-mcp-writesite`) that only accepts a `<domain>`
-argument and only ever writes to paths under `/etc/nginx/sites-available/`
-and `/etc/nginx/sites-enabled/`. The script re-validates the domain itself
-(independent of the Node-side validation), so even a bug that let a bad
-domain through the TypeScript layer can't be used to write outside those
-two directories. The trade-off: one more artifact to deploy and keep in
+The wrapper script narrows that: sudo is scoped to one purpose-built binary
+that can only write, enable, disable, or remove a single named site config
+— nothing else. The trade-off is one more artifact to deploy and keep in
 sync with the server, in exchange for sudo that can only ever do the one
 thing this project needs.
+
+Both installer scripts (`scripts/install.sh`, `scripts/install-sudoers.sh`)
+are idempotent — safe to re-run `npm run setup -- mcpuser` any time,
+including after you change the username or add a new allowed command.
 
 ## Testing locally with the MCP Inspector
 
@@ -81,16 +102,21 @@ Add to your MCP client config (path varies by client):
 }
 ```
 
+## Typical "add a new site" flow
+
+1. `create_domain_record` — point `mysite.julcap.net` at `www.julcap.net`
+2. (wait for DNS propagation)
+3. `create_server_block` — nginx serves the domain on port 80, reverse-proxied
+   to the local service IP:port
+4. `reload_nginx`
+5. `issue_cert` — certbot validates via HTTP-01, updates nginx to redirect to 443
+
 ## Next steps
 
-1. Test `list_sites` / `get_site_config` / `check_cert_expiry` against your
-   real `/etc/nginx` — these should work as-is (read-only, no sudo needed).
-2. Review and finish the TODO in `createServerBlock.ts` (temp-file → test →
-   move-into-place → symlink flow).
-3. Set up the sudoers entry, then test `reload_nginx`.
-4. Test `issue_cert` against **staging only** first — flipping `staging:false`
-   against production before you trust the flow risks burning your real rate
-   limit.
-5. Add `remove_site` and `renew_cert` following the same pattern as the
+1. Test `issue_cert` against **staging only** first — flipping `staging:false`
+   against production before you trust the flow risks burning your real
+   Let's Encrypt rate limit.
+2. Add `remove_site` and `renew_cert`, following the same pattern as the
    existing tools (validate → dry-run/test → confirm-required for anything
-   destructive).
+   destructive) and routed through `nginx-mcp-writesite` where they touch
+   `/etc/nginx/`.

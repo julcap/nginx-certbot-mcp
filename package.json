@@ -6,6 +6,9 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
+    "setup": "npm run install:wrapper && npm run install:sudoers",
+    "install:wrapper": "bash scripts/install.sh",
+    "install:sudoers": "bash scripts/install-sudoers.sh",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "inspect": "npx @modelcontextprotocol/inspector node dist/index.js"
