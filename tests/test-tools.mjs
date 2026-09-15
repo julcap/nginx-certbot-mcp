@@ -491,6 +491,10 @@ async function main() {
       await client.callTool("delete_cert", { domain: wildcardTestSub, confirm: true }).catch(() => {});
     }
     await cleanupTxtRecord(route53, hostedZoneId, `_acme-challenge.${testSub}`);
+    // certbot-dns-route53 normally cleans up its own challenge record after
+    // issue_wildcard_cert/renew_cert, but not if that call errored, timed
+    // out client-side, or got cancelled mid-flow - sweep it defensively too.
+    if (includeCerts) await cleanupTxtRecord(route53, hostedZoneId, `_acme-challenge.${wildcardTestSub}`);
     client.close();
   }
 
