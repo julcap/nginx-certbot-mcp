@@ -9,4 +9,5 @@ set -euo pipefail
 USER_NAME="${1:?Usage: npm run setup -- <username>}"
 
 bash scripts/install.sh
+bash scripts/install-deps.sh
 bash scripts/install-sudoers.sh "$USER_NAME"
