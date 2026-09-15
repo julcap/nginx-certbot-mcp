@@ -18,10 +18,11 @@ Instead of exposing arbitrary shell commands, privileged actions are restricted 
 | `get_site_config` | ✅ implemented                                                                                         |
 | `check_cert_expiry` | ✅ implemented                                                                                         |
 | `create_domain_record` | ✅ implemented — Route 53 CNAME via UPSERT                                                             |
-| `create_server_block` | ✅ implemented — writes/tests/enables via the `nginx-mcp-writesite` wrapper (see Required permissions) |
+| `delete_domain_record` | ✅ implemented — Route 53 CNAME delete; requires `confirm:true`                                        |
+| `create_site` | ✅ implemented — writes/tests/enables via the `nginx-mcp-writesite` wrapper (see Required permissions) |
+| `delete_site` | ✅ implemented — disables, archives to `sites-archived`, then deletes; requires `confirm:true`         |
 | `reload_nginx` | ✅ implemented                                                           |
 | `issue_cert` | 🚧 partly implemented — defaults to LE staging, includes a DNS pre-check                              |
-| `remove_site` | ✅ implemented — disables, archives to `sites-archived`, then deletes; requires `confirm:true`         |
 | `renew_cert` | ✅ implemented — `certbot renew`, defaults to `--dry-run`                                              |
 
 
@@ -59,13 +60,13 @@ This installs two things:
 
 | Variable | Used by | Notes |
 |---|---|---|
-| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | `create_domain_record` | Credentials for a Route-53-scoped IAM user — no other AWS permissions needed |
-| `ROUTE53_HOSTED_ZONE_ID` | `create_domain_record` | Find with `aws route53 list-hosted-zones-by-name --dns-name julcap.net` |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | `create_domain_record`, `delete_domain_record` | Credentials for a Route-53-scoped IAM user — no other AWS permissions needed |
+| `ROUTE53_HOSTED_ZONE_ID` | `create_domain_record`, `delete_domain_record` | Find with `aws route53 list-hosted-zones-by-name --dns-name julcap.net` |
 
 ## Why a wrapper script instead of sudo on tee/ln/rm
 
 An earlier version of this granted sudo on generic file tools (`tee`, `ln`,
-`rm`) so `create_server_block` could write into `/etc/nginx/`. That works,
+`rm`) so `create_site` could write into `/etc/nginx/`. That works,
 but it's a wider trust boundary than the task needs — those commands can
 touch *any* root-owned file on the box, not just nginx site configs. If the
 MCP server process were ever compromised or triggered unexpectedly, the
@@ -110,7 +111,7 @@ Add to your MCP client config (path varies by client):
 
 1. `create_domain_record` — point `mysite.julcap.net` at `www.julcap.net`
 2. (wait for DNS propagation)
-3. `create_server_block` — nginx serves the domain on port 80, reverse-proxied
+3. `create_site` — nginx serves the domain on port 80, reverse-proxied
    to the local service IP:port
 4. `reload_nginx`
 5. `issue_cert` — certbot validates via HTTP-01, updates nginx to redirect to 443
@@ -120,8 +121,8 @@ Add to your MCP client config (path varies by client):
 1. Test `issue_cert` against **staging only** first — flipping `staging:false`
    against production before you trust the flow risks burning your real
    Let's Encrypt rate limit.
-2. `remove_site` and `renew_cert` are implemented but not yet exercised
-   against a real box — dry-run `renew_cert` and try `remove_site` on a
+2. `delete_site` and `renew_cert` are implemented but not yet exercised
+   against a real box — dry-run `renew_cert` and try `delete_site` on a
    non-critical domain first before trusting either in production.
 
 ## Contributing

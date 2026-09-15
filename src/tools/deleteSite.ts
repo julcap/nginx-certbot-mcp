@@ -7,12 +7,12 @@ import { assertValidDomain } from "../validate.js";
 
 const execFileAsync = promisify(execFile);
 
-export interface RemoveSiteInput {
+export interface DeleteSiteInput {
   domain: string;
   confirm: boolean;
 }
 
-export interface RemoveSiteResult {
+export interface DeleteSiteResult {
   success: boolean;
   message: string;
   reload_required: boolean;
@@ -22,7 +22,7 @@ async function runWrapper(action: "disable" | "archive" | "remove", domain: stri
   await execFileAsync("sudo", ["/usr/local/bin/nginx-mcp-writesite", action, domain]);
 }
 
-export async function removeSite(input: RemoveSiteInput): Promise<RemoveSiteResult> {
+export async function deleteSite(input: DeleteSiteInput): Promise<DeleteSiteResult> {
   const { domain, confirm } = input;
   assertValidDomain(domain);
 

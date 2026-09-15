@@ -27,7 +27,7 @@ case "$ACTION" in
   enable)  ln -sf "$AVAILABLE_PATH" "$ENABLED_PATH" ;;
   disable) rm -f "$ENABLED_PATH" ;;
   remove)  rm -f "$AVAILABLE_PATH" ;;
-  # Copies the live config aside before remove_site deletes it, so a
+  # Copies the live config aside before delete_site deletes it, so a
   # mistaken removal can be restored by hand instead of being unrecoverable.
   archive)
     [ -f "$AVAILABLE_PATH" ] || { echo "No config to archive for $DOMAIN" >&2; exit 1; }

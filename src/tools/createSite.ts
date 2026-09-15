@@ -12,13 +12,13 @@ import { assertValidDomain, assertValidUpstreamHost, assertValidPort } from "../
 
 const execFileAsync = promisify(execFile);
 
-export interface CreateServerBlockInput {
+export interface CreateSiteInput {
   domain: string;
   upstream_host: string;
   upstream_port: number;
 }
 
-export interface CreateServerBlockResult {
+export interface CreateSiteResult {
   success: boolean;
   config_path?: string;
   test_output: string;
@@ -38,9 +38,9 @@ function writeSiteAsRoot(domain: string, content: string): Promise<void> {
     proc.stdin.end();
   });
 }
-export async function createServerBlock(
-  input: CreateServerBlockInput
-): Promise<CreateServerBlockResult> {
+export async function createSite(
+  input: CreateSiteInput
+): Promise<CreateSiteResult> {
   const { domain, upstream_host, upstream_port } = input;
 
   // Validate everything before it touches a file or template - this is the

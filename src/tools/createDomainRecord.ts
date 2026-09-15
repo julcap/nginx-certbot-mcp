@@ -1,5 +1,6 @@
-import { Route53Client, ChangeResourceRecordSetsCommand } from "@aws-sdk/client-route-53";
+import { ChangeResourceRecordSetsCommand } from "@aws-sdk/client-route-53";
 import { assertValidDomain } from "../validate.js";
+import { getRoute53Config } from "../route53.js";
 
 export interface CreateDomainRecordInput {
   domain: string; // e.g. "mysite.julcap.net"
@@ -22,19 +23,11 @@ export async function createDomainRecord(
   assertValidDomain(domain);
   assertValidDomain(target);
 
-  const hostedZoneId = process.env.ROUTE53_HOSTED_ZONE_ID;
-  const accessKeyId = process.env.AWS_ACCESS_KEY_ID;
-  const secretAccessKey = process.env.AWS_SECRET_ACCESS_KEY;
-  if (!hostedZoneId || !accessKeyId || !secretAccessKey) {
-    return {
-      success: false,
-      message:
-        "Missing AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, or ROUTE53_HOSTED_ZONE_ID - " +
-        "copy .env.example to .env and fill them in.",
-    };
+  const config = getRoute53Config();
+  if ("error" in config) {
+    return { success: false, message: config.error };
   }
-
-  const client = new Route53Client({ credentials: { accessKeyId, secretAccessKey } });
+  const { client, hostedZoneId } = config;
 
   try {
     const result = await client.send(

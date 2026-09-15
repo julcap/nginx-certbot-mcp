@@ -7,10 +7,11 @@ import { listSites } from "./tools/listSites.js";
 import { getSiteConfig } from "./tools/getSiteConfig.js";
 import { checkCertExpiry } from "./tools/checkCertExpiry.js";
 import { createDomainRecord } from "./tools/createDomainRecord.js";
-import { createServerBlock } from "./tools/createServerBlock.js";
+import { deleteDomainRecord } from "./tools/deleteDomainRecord.js";
+import { createSite } from "./tools/createSite.js";
 import { reloadNginx } from "./tools/reloadNginx.js";
 import { issueCert } from "./tools/issueCert.js";
-import { removeSite } from "./tools/removeSite.js";
+import { deleteSite } from "./tools/deleteSite.js";
 import { renewCert } from "./tools/renewCert.js";
 
 const server = new McpServer({
@@ -63,7 +64,7 @@ server.registerTool(
   {
     description:
       "Upsert a Route 53 CNAME record pointing `domain` at `target`. " +
-      "Run this before create_server_block / issue_cert and wait for DNS propagation.",
+      "Run this before create_site / issue_cert and wait for DNS propagation.",
     inputSchema: {
       domain: z.string().describe("The domain to create/update, e.g. mysite.julcap.net"),
       target: z.string().describe("CNAME target the domain should point to, e.g. www.julcap.net"),
@@ -77,7 +78,24 @@ server.registerTool(
 );
 
 server.registerTool(
-  "create_server_block",
+  "delete_domain_record",
+  {
+    description:
+      "Delete the Route 53 CNAME record for a domain. Destructive - requires confirm:true " +
+      "to actually act; without it, returns what would happen.",
+    inputSchema: {
+      domain: z.string(),
+      confirm: z.boolean().default(false),
+    },
+  },
+  async ({ domain, confirm }) => {
+    const result = await deleteDomainRecord({ domain, confirm });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.registerTool(
+  "create_site",
   {
     description:
       "Create a new nginx server block from the websocket-capable default template. " +
@@ -89,7 +107,7 @@ server.registerTool(
     },
   },
   async ({ domain, upstream_host, upstream_port }) => {
-    const result = await createServerBlock({ domain, upstream_host, upstream_port });
+    const result = await createSite({ domain, upstream_host, upstream_port });
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   }
 );
@@ -125,7 +143,7 @@ server.registerTool(
 );
 
 server.registerTool(
-  "remove_site",
+  "delete_site",
   {
     description:
       "Disable, archive, and delete the nginx server block for a domain. Destructive - " +
@@ -137,7 +155,7 @@ server.registerTool(
     },
   },
   async ({ domain, confirm }) => {
-    const result = await removeSite({ domain, confirm });
+    const result = await deleteSite({ domain, confirm });
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   }
 );
