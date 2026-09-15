@@ -499,24 +499,47 @@ server.registerTool(
   "issue_cert",
   {
     description:
-      "Request a certificate via `certbot --nginx` (HTTP-01 validation) for a domain that " +
-      "already has an nginx site; certbot reloads nginx itself on success. Pre-checks that the " +
-      "domain resolves and fails fast with guidance if not, rather than burning an attempt " +
-      "against Let's Encrypt's rate limits. Defaults to Let's Encrypt staging - pass " +
-      "staging:false only when you mean it. For a *.domain wildcard, use issue_wildcard_cert " +
-      "instead - HTTP-01 can't validate wildcards.",
+      "Request a certificate via `certbot --nginx` (HTTP-01 validation). Requires an nginx " +
+      "server block for `domain` to already exist (create_site) - certbot's nginx plugin edits " +
+      "that existing sites-available config in place, adding an SSL server block and an " +
+      "HTTP->HTTPS redirect; it does not create a new site from scratch, and it reloads nginx " +
+      "itself on success (no separate reload_nginx call needed). Pre-checks that the domain " +
+      "resolves and fails fast with guidance if not, avoiding a wasted attempt against Let's " +
+      "Encrypt's rate limits. Defaults to Let's Encrypt staging, which issues browser-untrusted " +
+      "certs but is exempt from rate limits - pass staging:false only when you're ready for a " +
+      "real, publicly CT-logged certificate: production Let's Encrypt enforces real per-domain " +
+      "issuance rate limits (a handful of certs per week), and a mis-issued cert isn't silently " +
+      "undone - call revoke_cert if you need to invalidate one. For a *.domain wildcard, use " +
+      "issue_wildcard_cert instead - HTTP-01 can't validate wildcards.",
     inputSchema: {
-      domain: z.string().describe("Domain to request a certificate for; must already resolve and have an nginx site"),
+      domain: z
+        .string()
+        .describe(
+          "Domain to request a certificate for. Must already resolve (see check_dns) and " +
+            "already have an nginx server block from create_site - certbot edits that existing " +
+            "config rather than creating one."
+        ),
       staging: z
         .boolean()
         .default(true)
-        .describe("True (default) uses Let's Encrypt's staging CA: untrusted certs, but no rate-limit risk"),
-      email: z.string().optional().describe("Contact email for the Let's Encrypt account; omitted registers unsafely-without-email"),
+        .describe(
+          "True (default) uses Let's Encrypt's staging CA - browser-untrusted certs, but exempt " +
+            "from production rate limits; use for testing the flow. False requests a real, " +
+            "browser-trusted cert and counts against production rate limits."
+        ),
+      email: z
+        .string()
+        .optional()
+        .describe(
+          "Contact email registered with the Let's Encrypt account, used for renewal-failure " +
+            "and expiry notices. Omitted registers with --register-unsafely-without-email, so " +
+            "Let's Encrypt cannot warn you if a future automated renewal fails."
+        ),
     },
     outputSchema: {
       success: z.boolean(),
-      certbot_output: z.string(),
-      dns_check: z.object(dnsCheckResultShape).optional().describe("Present only when the DNS pre-check failed"),
+      certbot_output: z.string().describe("Raw combined stdout/stderr from the certbot CLI invocation, on success or failure"),
+      dns_check: z.object(dnsCheckResultShape).optional().describe("Present only when the DNS pre-check failed, before certbot was even invoked"),
     },
     annotations: { destructiveHint: false, openWorldHint: true },
   },
