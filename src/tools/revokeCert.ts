@@ -32,12 +32,15 @@ export async function revokeCert(input: RevokeCertInput): Promise<RevokeCertResu
   }
 
   try {
-    // Revokes only - leaves the (now-untrusted) cert files on disk so
-    // delete_cert stays the one tool responsible for removing them.
+    // --no-delete-after-revoke: certbot's default is actually to delete the
+    // cert files as part of revoke (despite the flag being named like an
+    // opt-in) - explicit here so revoke only revokes, leaving the
+    // (now-untrusted) files on disk for delete_cert to remove separately.
     const { stdout, stderr } = await execFileAsync("sudo", [
       "certbot", "revoke",
       "--cert-name", domain,
       "--non-interactive",
+      "--no-delete-after-revoke",
     ]);
     return { success: true, message: stdout + stderr };
   } catch (err: any) {

@@ -147,14 +147,17 @@ npm run install:deps
 ```
 
 Debian/Ubuntu only. Idempotent: installs `nginx`, `certbot`,
-`python3-certbot-nginx`, and `python3-certbot-dns-route53` if missing. If
-`certbot` turns out to already be a **snap** install (common - certbot's own
-docs recommend snap over apt's often-outdated package), it installs
-`certbot-dns-route53` as a snap plugin instead: an apt-installed plugin is
-completely invisible to snap certbot's isolated Python environment, which
-surfaces later as `issue_wildcard_cert` failing with "The requested
-dns-route53 plugin does not appear to be installed" even though `dpkg`
-thinks it's there. If packages are already installed it only reports
+`python3-certbot-nginx`, and `python3-certbot-dns-route53` (via apt) if
+missing. If `certbot` looks like a **snap** install (common - certbot's own
+docs recommend snap over apt's often-outdated package), it *also* tries
+installing `certbot-dns-route53` as a snap plugin, since an apt-installed
+plugin can be invisible to snap certbot's isolated Python environment
+(surfaces as `issue_wildcard_cert` failing with "The requested dns-route53
+plugin does not appear to be installed" even though `dpkg` thinks it's
+there). That snap install is best-effort, not a certainty (snapd might not
+be set up, or that snap might not be available) - it never replaces the apt
+package, only supplements it, so `issue_wildcard_cert` still has a working
+path either way. If packages are already installed it only reports
 whether the version is current or older than what's available — it never
 silently upgrades a package that might already be serving traffic; it
 prints the `apt-get`

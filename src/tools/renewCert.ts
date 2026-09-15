@@ -18,7 +18,12 @@ export async function renewCert(input: RenewCertInput): Promise<RenewCertResult>
   const { domain, dry_run = true } = input;
   if (domain) assertValidDomain(domain);
 
-  const args = ["renew", "--non-interactive"];
+  // --no-random-sleep-on-renew: certbot renew normally injects a random
+  // delay (minutes to hours) before each renewal, to spread load when many
+  // boxes all have the same cron schedule. That's the right default for an
+  // unattended nightly job, but wrong for a tool an agent calls expecting a
+  // synchronous response.
+  const args = ["renew", "--non-interactive", "--no-random-sleep-on-renew"];
   if (domain) args.push("--cert-name", domain);
   // --dry-run simulates the full renewal against Let's Encrypt's staging
   // environment without touching the live cert or the rate limit - keep
