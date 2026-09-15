@@ -79,6 +79,8 @@ this repo doesn't install it for you.
 
 ## Network requirements for certificate issuance
 
+![HTTP-01 and DNS-01 network requirements](docs/certificate-network-requirements.svg)
+
 `issue_cert` and `issue_wildcard_cert` validate domain ownership two
 completely different ways, with different requirements on where the box
 sits on your network:

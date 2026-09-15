@@ -1,0 +1,133 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="920" viewBox="0 0 1440 920" role="img" aria-labelledby="title desc">
+  <title id="title">Certificate issuance network requirements</title>
+  <desc id="desc">Comparison of HTTP-01 inbound validation, which requires public DNS and port 80 forwarding to the exact Nginx host, with DNS-01 validation, which uses outbound access to Route 53 and needs no inbound port forwarding.</desc>
+
+  <defs>
+    <marker id="arrow-blue" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#2563eb"/>
+    </marker>
+    <marker id="arrow-green" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#059669"/>
+    </marker>
+    <marker id="arrow-red" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#dc2626"/>
+    </marker>
+    <style>
+      .title { font: 700 34px Inter, ui-sans-serif, system-ui, sans-serif; fill: #0f172a; }
+      .subtitle { font: 400 17px Inter, ui-sans-serif, system-ui, sans-serif; fill: #475569; }
+      .panel-title { font: 700 24px Inter, ui-sans-serif, system-ui, sans-serif; fill: #ffffff; }
+      .panel-subtitle { font: 500 15px Inter, ui-sans-serif, system-ui, sans-serif; fill: #dbeafe; }
+      .panel-subtitle-green { font: 500 15px Inter, ui-sans-serif, system-ui, sans-serif; fill: #d1fae5; }
+      .node-title { font: 700 16px Inter, ui-sans-serif, system-ui, sans-serif; fill: #0f172a; }
+      .node-text { font: 400 14px Inter, ui-sans-serif, system-ui, sans-serif; fill: #475569; }
+      .edge { font: 600 13px Inter, ui-sans-serif, system-ui, sans-serif; fill: #334155; }
+      .note-title { font: 700 17px Inter, ui-sans-serif, system-ui, sans-serif; fill: #0f172a; }
+      .note-text { font: 400 14px Inter, ui-sans-serif, system-ui, sans-serif; fill: #334155; }
+      .pill { font: 700 13px Inter, ui-sans-serif, system-ui, sans-serif; }
+    </style>
+  </defs>
+
+  <rect width="1440" height="920" fill="#f8fafc"/>
+
+  <text x="720" y="55" text-anchor="middle" class="title">Certificate issuance network requirements</text>
+  <text x="720" y="86" text-anchor="middle" class="subtitle">The two Certbot tools prove domain control through different network paths</text>
+
+  <!-- HTTP-01 panel -->
+  <rect x="50" y="120" width="650" height="600" rx="18" fill="#ffffff" stroke="#bfdbfe" stroke-width="2"/>
+  <path d="M68 120 H682 A18 18 0 0 1 700 138 V210 H50 V138 A18 18 0 0 1 68 120 Z" fill="#1d4ed8"/>
+  <text x="78" y="161" class="panel-title">issue_cert · HTTP-01</text>
+  <text x="78" y="190" class="panel-subtitle">Inbound validation · public port 80 must reach the correct host</text>
+
+  <rect x="80" y="246" width="150" height="76" rx="12" fill="#eff6ff" stroke="#93c5fd"/>
+  <text x="155" y="277" text-anchor="middle" class="node-title">Let’s Encrypt</text>
+  <text x="155" y="300" text-anchor="middle" class="node-text">validation server</text>
+
+  <rect x="300" y="246" width="150" height="76" rx="12" fill="#eff6ff" stroke="#93c5fd"/>
+  <text x="375" y="277" text-anchor="middle" class="node-title">Public DNS</text>
+  <text x="375" y="300" text-anchor="middle" class="node-text">domain → public IP</text>
+
+  <rect x="520" y="246" width="150" height="76" rx="12" fill="#eff6ff" stroke="#93c5fd"/>
+  <text x="595" y="277" text-anchor="middle" class="node-title">Router / firewall</text>
+  <text x="595" y="300" text-anchor="middle" class="node-text">NAT forwards port 80</text>
+
+  <path d="M230 284 H292" fill="none" stroke="#2563eb" stroke-width="3" marker-end="url(#arrow-blue)"/>
+  <text x="261" y="267" text-anchor="middle" class="edge">HTTP</text>
+  <path d="M450 284 H512" fill="none" stroke="#2563eb" stroke-width="3" marker-end="url(#arrow-blue)"/>
+  <text x="481" y="267" text-anchor="middle" class="edge">public IP</text>
+
+  <rect x="260" y="390" width="230" height="104" rx="14" fill="#dbeafe" stroke="#2563eb" stroke-width="2"/>
+  <text x="375" y="423" text-anchor="middle" class="node-title">Exact private host</text>
+  <text x="375" y="447" text-anchor="middle" class="node-text">Nginx + nginx-certbot-mcp</text>
+  <text x="375" y="470" text-anchor="middle" class="node-text">serves the challenge token</text>
+
+  <path d="M595 322 V360 Q595 375 580 375 H395 Q375 375 375 390" fill="none" stroke="#2563eb" stroke-width="3" marker-end="url(#arrow-blue)"/>
+  <text x="535" y="360" text-anchor="middle" class="edge">forward :80</text>
+
+  <rect x="82" y="558" width="242" height="104" rx="14" fill="#fff1f2" stroke="#fda4af" stroke-width="2" stroke-dasharray="7 5"/>
+  <text x="203" y="591" text-anchor="middle" class="node-title">Wrong box or VM</text>
+  <text x="203" y="615" text-anchor="middle" class="node-text">Different private IP</text>
+  <text x="203" y="639" text-anchor="middle" class="node-text">challenge never arrives</text>
+
+  <rect x="427" y="558" width="242" height="104" rx="14" fill="#fff1f2" stroke="#fda4af" stroke-width="2" stroke-dasharray="7 5"/>
+  <text x="548" y="591" text-anchor="middle" class="node-title">Docker bridge container</text>
+  <text x="548" y="615" text-anchor="middle" class="node-text">Separate private network</text>
+  <text x="548" y="639" text-anchor="middle" class="node-text">needs explicit port publishing</text>
+
+  <path d="M595 322 V530 H203 V550" fill="none" stroke="#dc2626" stroke-width="2.5" stroke-dasharray="7 5" marker-end="url(#arrow-red)"/>
+  <path d="M595 322 V530 H548 V550" fill="none" stroke="#dc2626" stroke-width="2.5" stroke-dasharray="7 5" marker-end="url(#arrow-red)"/>
+  <rect x="309" y="510" width="188" height="29" rx="14.5" fill="#fff1f2" stroke="#fecdd3"/>
+  <text x="403" y="530" text-anchor="middle" class="pill" fill="#be123c">NOT TARGETED BY NAT</text>
+
+  <!-- DNS-01 panel -->
+  <rect x="740" y="120" width="650" height="600" rx="18" fill="#ffffff" stroke="#a7f3d0" stroke-width="2"/>
+  <path d="M758 120 H1372 A18 18 0 0 1 1390 138 V210 H740 V138 A18 18 0 0 1 758 120 Z" fill="#047857"/>
+  <text x="768" y="161" class="panel-title">issue_wildcard_cert · DNS-01</text>
+  <text x="768" y="190" class="panel-subtitle-green">Outbound validation · no inbound port forwarding required</text>
+
+  <rect x="780" y="246" width="180" height="90" rx="12" fill="#ecfdf5" stroke="#6ee7b7"/>
+  <text x="870" y="278" text-anchor="middle" class="node-title">MCP host</text>
+  <text x="870" y="302" text-anchor="middle" class="node-text">physical, VM, or Docker</text>
+  <text x="870" y="323" text-anchor="middle" class="node-text">sandbox</text>
+
+  <rect x="1000" y="246" width="170" height="90" rx="12" fill="#ecfdf5" stroke="#6ee7b7"/>
+  <text x="1085" y="278" text-anchor="middle" class="node-title">AWS Route 53</text>
+  <text x="1085" y="302" text-anchor="middle" class="node-text">DNS API creates</text>
+  <text x="1085" y="323" text-anchor="middle" class="node-text">TXT challenge record</text>
+
+  <rect x="1210" y="246" width="140" height="90" rx="12" fill="#ecfdf5" stroke="#6ee7b7"/>
+  <text x="1280" y="278" text-anchor="middle" class="node-title">Public DNS</text>
+  <text x="1280" y="302" text-anchor="middle" class="node-text">_acme-challenge</text>
+  <text x="1280" y="323" text-anchor="middle" class="node-text">TXT record</text>
+
+  <path d="M960 291 H992" fill="none" stroke="#059669" stroke-width="3" marker-end="url(#arrow-green)"/>
+  <text x="976" y="270" text-anchor="middle" class="edge">HTTPS</text>
+  <path d="M1170 291 H1202" fill="none" stroke="#059669" stroke-width="3" marker-end="url(#arrow-green)"/>
+  <text x="1186" y="270" text-anchor="middle" class="edge">TXT</text>
+
+  <rect x="965" y="407" width="230" height="104" rx="14" fill="#d1fae5" stroke="#059669" stroke-width="2"/>
+  <text x="1080" y="440" text-anchor="middle" class="node-title">Let’s Encrypt</text>
+  <text x="1080" y="464" text-anchor="middle" class="node-text">looks up the TXT record</text>
+  <text x="1080" y="488" text-anchor="middle" class="node-text">through public DNS</text>
+
+  <path d="M1280 336 V375 Q1280 390 1265 390 H1100 Q1080 390 1080 407" fill="none" stroke="#059669" stroke-width="3" marker-end="url(#arrow-green)"/>
+
+  <rect x="815" y="567" width="500" height="76" rx="14" fill="#f0fdf4" stroke="#86efac"/>
+  <text x="1065" y="596" text-anchor="middle" class="node-title">Works from any network with outbound access</text>
+  <text x="1065" y="620" text-anchor="middle" class="node-text">No public listener · no NAT rule · no fixed private IP</text>
+  <path d="M870 336 V558" fill="none" stroke="#059669" stroke-width="2.5" stroke-dasharray="7 5" marker-end="url(#arrow-green)"/>
+
+  <!-- Shared clarification -->
+  <rect x="50" y="752" width="1340" height="130" rx="18" fill="#fff7ed" stroke="#fdba74" stroke-width="2"/>
+  <text x="82" y="788" class="note-title">Separate requirement: serving the site after certificate issuance</text>
+  <text x="82" y="818" class="note-text">For the website to be reachable: DNS A/AAAA → public IP → Nginx. Behind NAT, forward ports 80/443 to its host.</text>
+  <text x="82" y="846" class="note-text">This is required for HTTP-01 validation, but it is not required merely to obtain a certificate through DNS-01.</text>
+
+  <rect x="995" y="785" width="105" height="42" rx="10" fill="#ffedd5" stroke="#fb923c"/>
+  <text x="1047" y="811" text-anchor="middle" class="node-title">A / AAAA</text>
+  <path d="M1108 806 H1158" fill="none" stroke="#ea580c" stroke-width="3" marker-end="url(#arrow-red)"/>
+  <rect x="1168" y="785" width="95" height="42" rx="10" fill="#ffedd5" stroke="#fb923c"/>
+  <text x="1215" y="811" text-anchor="middle" class="node-title">Public IP</text>
+  <path d="M1271 806 H1306" fill="none" stroke="#ea580c" stroke-width="3" marker-end="url(#arrow-red)"/>
+  <rect x="1316" y="785" width="55" height="42" rx="10" fill="#ffedd5" stroke="#fb923c"/>
+  <text x="1343" y="811" text-anchor="middle" class="node-title">Nginx</text>
+</svg>
