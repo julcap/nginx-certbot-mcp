@@ -12,8 +12,8 @@ certs via certbot. See `../nginx-mcp-tool-spec.md` for the full design.
 | `check_cert_expiry` | ✅ implemented                                                                                         |
 | `create_domain_record` | ✅ implemented — Route 53 CNAME via UPSERT                                                             |
 | `create_server_block` | ✅ implemented — writes/tests/enables via the `nginx-mcp-writesite` wrapper (see Required permissions) |
-| `reload_nginx` | ✅ implemented — needs sudoers entry below                                                             |
-| `issue_cert` | 🚧 partly implemented — needs sudoers entry, defaults to LE staging                                    |
+| `reload_nginx` | ✅ implemented                                                           |
+| `issue_cert` | 🚧 partly implemented — defaults to LE staging                                    |
 | `remove_site` | ⬜ not started                                                                                         |
 | `renew_cert` | ⬜ not started                                                                                         |
 
