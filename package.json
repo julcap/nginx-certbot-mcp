@@ -6,7 +6,7 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
-    "setup": "npm run install:wrapper && npm run install:sudoers",
+    "setup": "bash scripts/setup.sh",
     "install:wrapper": "bash scripts/install.sh",
     "install:sudoers": "bash scripts/install-sudoers.sh",
     "start": "node dist/index.js",
