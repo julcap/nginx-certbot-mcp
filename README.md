@@ -124,3 +124,19 @@ Add to your MCP client config (path varies by client):
    existing tools (validate → dry-run/test → confirm-required for anything
    destructive) and routed through `nginx-mcp-writesite` where they touch
    `/etc/nginx/`.
+
+## Contributing
+
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md)
+for guidelines.
+
+## License
+
+nginx-certbot-mcp is source-available under the
+[Elastic License 2.0](LICENSE).
+
+You may use, modify, and redistribute the software. However, you may not
+provide a substantial portion of its functionality to third parties as a
+hosted or managed service.
+
+For commercial licensing or partnership enquiries, contact the maintainer.
