@@ -20,9 +20,9 @@ Instead of exposing arbitrary shell commands, privileged actions are restricted 
 | `create_domain_record` | ✅ implemented — Route 53 CNAME via UPSERT                                                             |
 | `create_server_block` | ✅ implemented — writes/tests/enables via the `nginx-mcp-writesite` wrapper (see Required permissions) |
 | `reload_nginx` | ✅ implemented                                                           |
-| `issue_cert` | 🚧 partly implemented — defaults to LE staging                                    |
-| `remove_site` | ⬜ not started                                                                                         |
-| `renew_cert` | ⬜ not started                                                                                         |
+| `issue_cert` | 🚧 partly implemented — defaults to LE staging, includes a DNS pre-check                              |
+| `remove_site` | ✅ implemented — disables, archives to `sites-archived`, then deletes; requires `confirm:true`         |
+| `renew_cert` | ✅ implemented — `certbot renew`, defaults to `--dry-run`                                              |
 
 
 ## Setup
@@ -120,10 +120,9 @@ Add to your MCP client config (path varies by client):
 1. Test `issue_cert` against **staging only** first — flipping `staging:false`
    against production before you trust the flow risks burning your real
    Let's Encrypt rate limit.
-2. Add `remove_site` and `renew_cert`, following the same pattern as the
-   existing tools (validate → dry-run/test → confirm-required for anything
-   destructive) and routed through `nginx-mcp-writesite` where they touch
-   `/etc/nginx/`.
+2. `remove_site` and `renew_cert` are implemented but not yet exercised
+   against a real box — dry-run `renew_cert` and try `remove_site` on a
+   non-critical domain first before trusting either in production.
 
 ## Contributing
 

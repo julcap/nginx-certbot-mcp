@@ -25,29 +25,6 @@
 #     stray files behind.
 set -euo pipefail
 
-# Replace the script body from:
-
-USER_NAME="${1:?Usage: $0 <username-to-grant>}"
-SUDOERS_FILE="/etc/sudoers.d/nginx-mcp"
-TMP_FILE="$(mktemp)"
-
-cat > "$TMP_FILE" <<EOF
-$USER_NAME ALL=(root) NOPASSWD: /usr/sbin/nginx -t, /usr/bin/systemctl reload nginx, /usr/bin/certbot, /usr/local/bin/nginx-mcp-writesite
-EOF
-
-# visudo -c validates syntax without touching the real sudoers files.
-if ! sudo visudo -c -f "$TMP_FILE"; then
-  echo "Syntax check failed - not installing. See errors above." >&2
-  rm -f "$TMP_FILE"
-  exit 1
-fi
-
-sudo install -m 0440 -o root -g root "$TMP_FILE" "$SUDOERS_FILE"
-rm -f "$TMP_FILE"
-echo "Installed $SUDOERS_FILE for user $USER_NAME"
-
-# With:
-
 USER_NAME="${1:?Usage: $0 <username-to-grant>}"
 SUDOERS_FILE="/etc/sudoers.d/nginx-mcp"
 TMP_FILE="$(mktemp)"

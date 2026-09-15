@@ -6,9 +6,10 @@ set -euo pipefail
 
 SITES_AVAILABLE="/etc/nginx/sites-available"
 SITES_ENABLED="/etc/nginx/sites-enabled"
+ARCHIVE_DIR="/etc/nginx/sites-archived"
 DOMAIN_RE='^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$'
 
-usage() { echo "Usage: $0 {write|enable|disable|remove} <domain>" >&2; exit 1; }
+usage() { echo "Usage: $0 {write|enable|disable|remove|archive} <domain>" >&2; exit 1; }
 
 [ $# -ge 2 ] || usage
 ACTION="$1"
@@ -26,5 +27,12 @@ case "$ACTION" in
   enable)  ln -sf "$AVAILABLE_PATH" "$ENABLED_PATH" ;;
   disable) rm -f "$ENABLED_PATH" ;;
   remove)  rm -f "$AVAILABLE_PATH" ;;
+  # Copies the live config aside before remove_site deletes it, so a
+  # mistaken removal can be restored by hand instead of being unrecoverable.
+  archive)
+    [ -f "$AVAILABLE_PATH" ] || { echo "No config to archive for $DOMAIN" >&2; exit 1; }
+    mkdir -p "$ARCHIVE_DIR"
+    cp -p "$AVAILABLE_PATH" "$ARCHIVE_DIR/$DOMAIN.$(date +%Y%m%dT%H%M%S)"
+    ;;
   *) usage ;;
 esac
