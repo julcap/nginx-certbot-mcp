@@ -291,6 +291,12 @@ async function main() {
 
   const label = `mcp-test-${randomBytes(4).toString("hex")}`;
   const testSub = `${label}.${testDomain}`;
+  // Separate from testSub: issue_cert and issue_wildcard_cert would both
+  // otherwise target the same primary domain, and certbot names cert
+  // lineages after the primary domain - running both against testSub risks
+  // a lineage-name collision (one cert with a SAN set, the other trying to
+  // reuse/expand the same name with a different SAN set).
+  const wildcardTestSub = `${label}-wc.${testDomain}`;
 
   const certToolsList = hostMode
     ? "issue_cert, issue_wildcard_cert, renew_cert, revoke_cert, delete_cert"
@@ -410,6 +416,14 @@ async function main() {
     }
 
     console.log("\n7. Certificates:");
+    // Whichever of issue_cert/issue_wildcard_cert actually succeeds becomes
+    // the one renew_cert/revoke_cert/delete_cert run against below -
+    // issue_cert preferred (it's the more realistic end-to-end path when
+    // this box really is the port-forward target), falling back to
+    // issue_wildcard_cert so Docker-mode (which can never run issue_cert)
+    // still gets that coverage.
+    let certForLifecycle = null;
+
     if (hostMode && includeCerts) {
       if (dnsCreated.pass) {
         const attempts = 10, intervalMs = 30000;
@@ -426,7 +440,8 @@ async function main() {
         if (cancelled) {
           report("issue_cert", "skip", "cancelled by user");
         } else if (resolved) {
-          await step(client, "issue_cert", { domain: testSub, staging: true }, (p) => p?.success === true, 120000);
+          const issued = await step(client, "issue_cert", { domain: testSub, staging: true }, (p) => p?.success === true, 120000);
+          if (issued.pass) certForLifecycle = testSub;
         } else {
           report("issue_cert", "skip", `DNS didn't propagate within ${(attempts * intervalMs) / 1000}s - can't attempt HTTP-01`);
         }
@@ -440,26 +455,41 @@ async function main() {
     } else {
       report("issue_cert", "skip", "needs public port-80 reachability, not available in the sandbox");
     }
+
     if (includeCerts && !cancelled) {
-      const issued = await step(client, "issue_wildcard_cert", { domain: testSub, staging: true }, (p) => p?.success === true, 180000);
+      const issued = await step(client, "issue_wildcard_cert", { domain: wildcardTestSub, staging: true }, (p) => p?.success === true, 180000);
       if (issued.pass) {
-        // Same 180s budget as issue_wildcard_cert - a dry-run renewal still
-        // does the full DNS-01 create/propagate/validate/cleanup dance.
-        await step(client, "renew_cert", { domain: testSub, dry_run: true }, (p) => p?.success === true, 180000);
-        await step(client, "revoke_cert", { domain: testSub, confirm: true }, (p) => p?.success === true);
-        await step(client, "delete_cert", { domain: testSub, confirm: true }, (p) => p?.success === true);
-      } else {
-        for (const t of ["renew_cert", "revoke_cert", "delete_cert"]) report(t, "skip", "blocked by issue_wildcard_cert failure");
+        if (certForLifecycle) {
+          // issue_cert already gave us a cert to use below - this one was
+          // purely to confirm issue_wildcard_cert itself works, clean it up.
+          await client.callTool("delete_cert", { domain: wildcardTestSub, confirm: true }).catch(() => {});
+        } else {
+          certForLifecycle = wildcardTestSub;
+        }
       }
     } else {
-      const reason = cancelled ? "cancelled by user" : "cert scenario declined";
-      for (const t of ["issue_wildcard_cert", "renew_cert", "revoke_cert", "delete_cert"]) report(t, "skip", reason);
+      report("issue_wildcard_cert", "skip", cancelled ? "cancelled by user" : "cert scenario declined");
+    }
+
+    if (certForLifecycle && !cancelled) {
+      // Same 180s budget as issue_wildcard_cert - a dry-run renewal against
+      // a DNS-01 cert still does the full create/propagate/validate/cleanup
+      // dance; against an issue_cert (HTTP-01) cert it's normally much faster.
+      await step(client, "renew_cert", { domain: certForLifecycle, dry_run: true }, (p) => p?.success === true, 180000);
+      await step(client, "revoke_cert", { domain: certForLifecycle, confirm: true }, (p) => p?.success === true);
+      await step(client, "delete_cert", { domain: certForLifecycle, confirm: true }, (p) => p?.success === true);
+    } else {
+      const reason = cancelled ? "cancelled by user" : !includeCerts ? "cert scenario declined" : "no certificate was issued to test against";
+      for (const t of ["renew_cert", "revoke_cert", "delete_cert"]) report(t, "skip", reason);
     }
   } finally {
     console.log("\n8. Best-effort cleanup...");
     await client.callTool("delete_site", { domain: testSub, confirm: true }).catch(() => {});
     await client.callTool("delete_domain_record", { domain: testSub, confirm: true }).catch(() => {});
-    if (includeCerts) await client.callTool("delete_cert", { domain: testSub, confirm: true }).catch(() => {});
+    if (includeCerts) {
+      await client.callTool("delete_cert", { domain: testSub, confirm: true }).catch(() => {});
+      await client.callTool("delete_cert", { domain: wildcardTestSub, confirm: true }).catch(() => {});
+    }
     await cleanupTxtRecord(route53, hostedZoneId, `_acme-challenge.${testSub}`);
     client.close();
   }
