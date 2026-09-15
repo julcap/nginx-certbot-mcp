@@ -45,8 +45,33 @@ const ALL_TOOLS = [
   "issue_cert", "issue_wildcard_cert", "renew_cert", "revoke_cert", "delete_cert",
 ];
 
+// Ctrl+C: first press asks any in-progress wait loop to stop early and lets
+// the script fall through to its normal cleanup/summary instead of dying
+// mid-run with test artifacts left behind; a second press force-quits, for
+// when cleanup itself is stuck.
+let cancelled = false;
+process.on("SIGINT", () => {
+  if (cancelled) {
+    console.log("\nSecond Ctrl+C - force quitting (cleanup may not have finished).");
+    process.exit(130);
+  }
+  cancelled = true;
+  console.log("\nCancel requested - finishing the current step, then cleaning up. Ctrl+C again to force quit.");
+});
+
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+// Sleeps in 1s slices so a Ctrl+C during a long wait (e.g. the DNS
+// propagation poll) takes effect within ~1s instead of up to the full
+// interval. Only covers that poll for now - an in-flight MCP tool call
+// (step()'s own timeout) can't be interrupted this way without killing and
+// restarting the server process mid-call.
+async function cancellableSleep(ms) {
+  for (let waited = 0; waited < ms && !cancelled; waited += 1000) {
+    await sleep(Math.min(1000, ms - waited));
+  }
 }
 
 function run(cmd, args, { capture = false } = {}) {
@@ -387,17 +412,23 @@ async function main() {
     console.log("\n7. Certificates:");
     if (hostMode && includeCerts) {
       if (dnsCreated.pass) {
-        console.log("   Waiting up to 300s (10 attempts, 30s apart) for DNS propagation before issue_cert...");
+        const attempts = 10, intervalMs = 30000;
+        console.log(`   Waiting up to ${(attempts * intervalMs) / 1000}s (${attempts} attempts, ` +
+          `${intervalMs / 1000}s apart) for DNS propagation before issue_cert - Ctrl+C to cancel...`);
         let resolved = false;
-        for (let i = 0; i < 10; i++) {
+        for (let i = 0; i < attempts && !cancelled; i++) {
+          process.stdout.write(`   [${i + 1}/${attempts}] checking "${testSub}"... `);
           const { ok, parsed } = await client.callTool("check_dns", { domain: testSub });
-          if (ok && parsed?.resolves) { resolved = true; break; }
-          await sleep(30000);
+          if (ok && parsed?.resolves) { console.log("resolved."); resolved = true; break; }
+          console.log(`not yet (${parsed?.resolves === false ? "no record" : ok ? "unexpected" : "check failed"}).`);
+          if (i < attempts - 1) await cancellableSleep(intervalMs);
         }
-        if (resolved) {
+        if (cancelled) {
+          report("issue_cert", "skip", "cancelled by user");
+        } else if (resolved) {
           await step(client, "issue_cert", { domain: testSub, staging: true }, (p) => p?.success === true, 120000);
         } else {
-          report("issue_cert", "skip", "DNS didn't propagate within 300s - can't attempt HTTP-01");
+          report("issue_cert", "skip", `DNS didn't propagate within ${(attempts * intervalMs) / 1000}s - can't attempt HTTP-01`);
         }
         await step(client, "delete_domain_record", { domain: testSub, confirm: true }, (p) => p?.success === true);
       } else {
@@ -409,7 +440,7 @@ async function main() {
     } else {
       report("issue_cert", "skip", "needs public port-80 reachability, not available in the sandbox");
     }
-    if (includeCerts) {
+    if (includeCerts && !cancelled) {
       const issued = await step(client, "issue_wildcard_cert", { domain: testSub, staging: true }, (p) => p?.success === true, 180000);
       if (issued.pass) {
         // Same 180s budget as issue_wildcard_cert - a dry-run renewal still
@@ -421,7 +452,8 @@ async function main() {
         for (const t of ["renew_cert", "revoke_cert", "delete_cert"]) report(t, "skip", "blocked by issue_wildcard_cert failure");
       }
     } else {
-      for (const t of ["issue_wildcard_cert", "renew_cert", "revoke_cert", "delete_cert"]) report(t, "skip", "cert scenario declined");
+      const reason = cancelled ? "cancelled by user" : "cert scenario declined";
+      for (const t of ["issue_wildcard_cert", "renew_cert", "revoke_cert", "delete_cert"]) report(t, "skip", reason);
     }
   } finally {
     console.log("\n8. Best-effort cleanup...");
@@ -440,9 +472,12 @@ async function main() {
     if (r.status === "fail") failures++;
     console.log(`${icon} ${tool}${r.detail ? " - " + r.detail : ""}`);
   }
-  console.log(`\n${failures === 0 ? "All tested tools passed." : `${failures} tool(s) failed.`}` +
+  const summary = cancelled
+    ? "Cancelled by user - remaining steps skipped, cleanup still ran."
+    : failures === 0 ? "All tested tools passed." : `${failures} tool(s) failed.`;
+  console.log(`\n${summary}` +
     (hostMode ? "" : " Sandbox is still running - `docker compose down` when you're done."));
-  process.exitCode = failures === 0 ? 0 : 1;
+  process.exitCode = cancelled ? 130 : failures === 0 ? 0 : 1;
 }
 
 main().catch((err) => {
