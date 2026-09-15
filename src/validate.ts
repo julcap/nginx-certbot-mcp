@@ -27,3 +27,14 @@ export function assertValidPort(port: number): void {
     throw new Error(`Invalid port: ${port}`);
   }
 }
+
+// DNS record names (TXT records in particular, e.g. _acme-challenge.example.com
+// or _dmarc.example.com) commonly start a label with an underscore - HOSTNAME_RE
+// above is deliberately stricter since it also has to be safe as a filename/shell arg.
+const DNS_RECORD_NAME_RE = /^(?=.{1,253}$)([a-zA-Z0-9_](?:[a-zA-Z0-9_-]{0,61}[a-zA-Z0-9_])?\.)+[a-zA-Z]{2,}$/;
+
+export function assertValidDnsRecordName(name: string): void {
+  if (!DNS_RECORD_NAME_RE.test(name)) {
+    throw new Error(`Invalid DNS record name: "${name}"`);
+  }
+}

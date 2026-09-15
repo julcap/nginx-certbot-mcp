@@ -1,18 +1,42 @@
 #!/usr/bin/env bash
 # nginx-mcp-writesite - narrow helper for nginx-certbot-mcp.
-# Only ever touches /etc/nginx/sites-available/<domain> and
-# /etc/nginx/sites-enabled/<domain> - nothing else on the filesystem.
+# Only ever touches /etc/nginx/sites-available/<domain>,
+# /etc/nginx/sites-enabled/<domain>, /etc/nginx/sites-archived/<domain>.<timestamp>,
+# and (read-only, capped) the two fixed nginx log files - nothing else on the filesystem.
 set -euo pipefail
 
 SITES_AVAILABLE="/etc/nginx/sites-available"
 SITES_ENABLED="/etc/nginx/sites-enabled"
 ARCHIVE_DIR="/etc/nginx/sites-archived"
+ACCESS_LOG="/var/log/nginx/access.log"
+ERROR_LOG="/var/log/nginx/error.log"
 DOMAIN_RE='^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$'
 
-usage() { echo "Usage: $0 {write|enable|disable|remove|archive} <domain>" >&2; exit 1; }
+usage() {
+  echo "Usage: $0 {write|enable|disable|remove|archive|restore|remove-archive} <domain> [archive_filename]" >&2
+  echo "       $0 log {access|error} <lines>" >&2
+  exit 1
+}
+
+[ $# -ge 1 ] || usage
+ACTION="$1"
+
+# `log` doesn't take a domain - handle it before the domain validation below.
+if [ "$ACTION" = "log" ]; then
+  [ $# -eq 3 ] || usage
+  LOG_TYPE="$2"
+  LINES="$3"
+  [[ "$LINES" =~ ^[0-9]{1,4}$ ]] || { echo "Invalid line count: $LINES" >&2; exit 1; }
+  [ "$LINES" -gt 1000 ] && LINES=1000
+  case "$LOG_TYPE" in
+    access) tail -n "$LINES" "$ACCESS_LOG" ;;
+    error)  tail -n "$LINES" "$ERROR_LOG" ;;
+    *) echo "Invalid log type: $LOG_TYPE (must be access|error)" >&2; exit 1 ;;
+  esac
+  exit 0
+fi
 
 [ $# -ge 2 ] || usage
-ACTION="$1"
 DOMAIN="$2"
 
 # Re-validates the domain independently of the Node code that calls this -
@@ -21,6 +45,16 @@ DOMAIN="$2"
 
 AVAILABLE_PATH="$SITES_AVAILABLE/$DOMAIN"
 ENABLED_PATH="$SITES_ENABLED/$DOMAIN"
+
+# Shared by restore/remove-archive: only ever touch a file that's exactly
+# "<domain>.<14-digit-timestamp>", named via a glob rather than a regex so a
+# path-traversal attempt (containing "/" or "..") can never match.
+validate_archive_filename() {
+  case "$1" in
+    "$DOMAIN".[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]) return 0 ;;
+    *) echo "Invalid archive filename: $1" >&2; exit 1 ;;
+  esac
+}
 
 case "$ACTION" in
   write)   cat > "$AVAILABLE_PATH" ;;             # content piped via stdin
@@ -33,6 +67,21 @@ case "$ACTION" in
     [ -f "$AVAILABLE_PATH" ] || { echo "No config to archive for $DOMAIN" >&2; exit 1; }
     mkdir -p "$ARCHIVE_DIR"
     cp -p "$AVAILABLE_PATH" "$ARCHIVE_DIR/$DOMAIN.$(date +%Y%m%dT%H%M%S)"
+    ;;
+  # Copies an archived config back into sites-available. Node picks which
+  # archive file (usually the newest) and passes its exact filename as $3.
+  restore)
+    ARCHIVE_FILE="${3:?Usage: $0 restore <domain> <archive_filename>}"
+    validate_archive_filename "$ARCHIVE_FILE"
+    SRC="$ARCHIVE_DIR/$ARCHIVE_FILE"
+    [ -f "$SRC" ] || { echo "No such archive: $ARCHIVE_FILE" >&2; exit 1; }
+    cp -p "$SRC" "$AVAILABLE_PATH"
+    ;;
+  # Permanently deletes one archived config - used by prune_archives.
+  remove-archive)
+    ARCHIVE_FILE="${3:?Usage: $0 remove-archive <domain> <archive_filename>}"
+    validate_archive_filename "$ARCHIVE_FILE"
+    rm -f "$ARCHIVE_DIR/$ARCHIVE_FILE"
     ;;
   *) usage ;;
 esac

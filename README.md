@@ -17,13 +17,24 @@ Instead of exposing arbitrary shell commands, privileged actions are restricted 
 | `list_sites` | ✅ implemented                                                                                         |
 | `get_site_config` | ✅ implemented                                                                                         |
 | `check_cert_expiry` | ✅ implemented                                                                                         |
+| `check_dns` | ✅ implemented — resolves CNAME, then A/AAAA                                                           |
+| `check_upstream_health` | ✅ implemented — TCP probe of host:port                                                                |
+| `get_nginx_status` | ✅ implemented — running state + version, no sudo needed                                               |
+| `tail_site_logs` | ✅ implemented — access/error log tail, capped at 1000 lines; `domain` filter is best-effort           |
+| `list_archived_sites` | ✅ implemented                                                                                         |
 | `create_domain_record` | ✅ implemented — Route 53 CNAME via UPSERT                                                             |
 | `delete_domain_record` | ✅ implemented — Route 53 CNAME delete; requires `confirm:true`                                        |
+| `create_txt_record` | ✅ implemented — Route 53 TXT via UPSERT, e.g. for ACME DNS-01                                         |
 | `create_site` | ✅ implemented — writes/tests/enables via the `nginx-mcp-writesite` wrapper (see Required permissions) |
 | `delete_site` | ✅ implemented — disables, archives to `sites-archived`, then deletes; requires `confirm:true`         |
+| `restore_site` | ✅ implemented — re-enables from the newest (or a chosen) archive; requires `confirm:true`             |
+| `prune_archives` | ✅ implemented — deletes archives older than N days; requires `confirm:true`                           |
 | `reload_nginx` | ✅ implemented                                                           |
 | `issue_cert` | 🚧 partly implemented — defaults to LE staging, includes a DNS pre-check                              |
+| `issue_wildcard_cert` | 🚧 partly implemented — needs certbot-dns-route53 installed on the box (see Required permissions)     |
 | `renew_cert` | ✅ implemented — `certbot renew`, defaults to `--dry-run`                                              |
+| `revoke_cert` | ✅ implemented — leaves cert files on disk; requires `confirm:true`                                    |
+| `delete_cert` | ✅ implemented — removes cert files from certbot's store; requires `confirm:true`                      |
 
 
 ## Setup
@@ -48,20 +59,29 @@ npm run setup -- mcpuser
 This installs two things:
 
 1. **`/usr/local/bin/nginx-mcp-writesite`** — a narrow wrapper script that
-   only accepts `{write|enable|disable|remove} <domain>` and only ever
-   touches paths under `/etc/nginx/sites-available/` and
-   `/etc/nginx/sites-enabled/`. It re-validates the domain itself,
-   independent of the Node-side validation.
+   only accepts `{write|enable|disable|remove|archive|restore|remove-archive} <domain>`
+   or `log {access|error} <lines>`, and only ever touches paths under
+   `/etc/nginx/sites-available/`, `/etc/nginx/sites-enabled/`,
+   `/etc/nginx/sites-archived/`, and the two fixed nginx log files. It
+   re-validates the domain (and, for `restore`/`remove-archive`, the archive
+   filename) itself, independent of the Node-side validation.
 2. **`/etc/sudoers.d/nginx-mcp`** — grants `mcpuser` passwordless sudo on
    exactly: `nginx -t`, `systemctl reload nginx`, `certbot`, and the
-   wrapper script above. Nothing broader.
+   wrapper script above. Nothing broader. It also keeps
+   `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` through sudo (which strips
+   the environment by default) so `certbot --dns-route53` can see them for
+   `issue_wildcard_cert` — no other environment variables are preserved.
+
+`issue_wildcard_cert` additionally needs the `certbot-dns-route53` plugin
+installed on the box (e.g. `apt install python3-certbot-dns-route53`) —
+this repo doesn't install it for you.
 
 ## Environment variables
 
 | Variable | Used by | Notes |
 |---|---|---|
-| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | `create_domain_record`, `delete_domain_record` | Credentials for a Route-53-scoped IAM user — no other AWS permissions needed |
-| `ROUTE53_HOSTED_ZONE_ID` | `create_domain_record`, `delete_domain_record` | Find with `aws route53 list-hosted-zones-by-name --dns-name julcap.net` |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | `create_domain_record`, `delete_domain_record`, `create_txt_record`, `issue_wildcard_cert` | Credentials for a Route-53-scoped IAM user — no other AWS permissions needed |
+| `ROUTE53_HOSTED_ZONE_ID` | `create_domain_record`, `delete_domain_record`, `create_txt_record` | Find with `aws route53 list-hosted-zones-by-name --dns-name julcap.net` |
 
 ## Why a wrapper script instead of sudo on tee/ln/rm
 
@@ -73,10 +93,11 @@ MCP server process were ever compromised or triggered unexpectedly, the
 blast radius would be the whole filesystem.
 
 The wrapper script narrows that: sudo is scoped to one purpose-built binary
-that can only write, enable, disable, or remove a single named site config
-— nothing else. The trade-off is one more artifact to deploy and keep in
-sync with the server, in exchange for sudo that can only ever do the one
-thing this project needs.
+that can only write, enable, disable, remove, archive, or restore a single
+named site config, prune one named archive, or tail one of the two fixed
+nginx log files — nothing else. The trade-off is one more artifact to
+deploy and keep in sync with the server, in exchange for sudo that can only
+ever do the things this project needs.
 
 Both installer scripts (`scripts/install.sh`, `scripts/install-sudoers.sh`)
 are idempotent — safe to re-run `npm run setup -- mcpuser` any time,
