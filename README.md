@@ -106,7 +106,7 @@ including after you change the username or add a new allowed command.
 
 ## Testing safely
 
-Three layers, from "needs almost nothing" to "exercises everything":
+Four layers, from "needs almost nothing" to "exercises everything":
 
 ### 1. Check/install dependencies
 
@@ -159,6 +159,34 @@ already installed by `scripts/setup.sh` during the image build, and
 it does persists once the container is gone (it's a fresh nginx/certbot
 install every rebuild).
 
+### 4. Automated tool-by-tool test suite
+
+```bash
+cp .env.test.example .env.test   # fill in AWS credentials + a domain you control
+npm run test:tools
+```
+
+Drives every registered MCP tool over the real stdio JSON-RPC protocol
+against the Docker sandbox (starting it via `docker compose up -d --build`
+if it isn't already running), and prints ✓/✗/– per tool. `.env.test` is
+separate from `.env`: it's read on the host, and its credentials get
+injected into each `docker compose exec` call directly, so `.env` and
+`.env.test` never need to match - `.env` only has to exist for `docker
+compose up` to start at all (the runner creates a blank one from
+`.env.example` automatically if it's missing).
+
+Before touching anything it verifies your AWS credentials work and that
+`TEST_DOMAIN` is actually the zone's apex or a subdomain of it - refusing
+to run against a domain the hosted zone doesn't control. Everything then
+runs under a random `mcp-test-<random>.<TEST_DOMAIN>` subdomain, self-cleans
+after each phase, and does a final best-effort cleanup pass regardless of
+what passed or failed. You'll be asked once, interactively, whether to also
+exercise certificate issuance (`issue_wildcard_cert`, `renew_cert`,
+`revoke_cert`, `delete_cert`) - it hits real Let's Encrypt staging and adds
+a minute or two, so it's opt-in. `issue_cert` (HTTP-01) is always skipped,
+since it needs the sandbox to be reachable on port 80 from the internet,
+which it isn't by default.
+
 ## Testing locally with the MCP Inspector
 
 ```bash
@@ -209,18 +237,15 @@ Or against the Docker sandbox, once it's running (`docker compose up -d`):
 
 ## Next steps
 
-1. `create_site`, `delete_site`, `restore_site`, `prune_archives`,
-   `reload_nginx`, `get_nginx_status`, `tail_site_logs`, and
-   `check_upstream_health` have all been exercised for real in the Docker
-   sandbox. `issue_cert`, `issue_wildcard_cert`, `renew_cert`,
-   `revoke_cert`, and `delete_cert` haven't (they need a publicly
-   resolvable domain and port 80/443 reachable from Let's Encrypt, which
-   the sandbox doesn't expose by default) — test those against **staging
-   only** first, since flipping `staging:false` before you trust the flow
-   risks burning your real Let's Encrypt rate limit.
-2. `npm run test:dns` is a safe way to validate your AWS credentials and
-   `ROUTE53_HOSTED_ZONE_ID` before trusting `create_domain_record` /
-   `delete_domain_record` / `create_txt_record` against anything real.
+1. `npm run test:tools` is the most thorough way to validate a change - it's
+   caught real bugs already (e.g. `get_nginx_status` assuming a D-Bus
+   session that isn't guaranteed to exist). `issue_cert` (HTTP-01) is
+   always skipped since the sandbox isn't publicly reachable on port 80 by
+   default; test it manually against **staging only** first if you need to,
+   since flipping `staging:false` before you trust the flow risks burning
+   your real Let's Encrypt rate limit.
+2. `npm run test:dns` is a narrower, faster check of just the Route 53
+   round trip if you don't need the full suite.
 
 ## Contributing
 
