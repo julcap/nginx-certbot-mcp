@@ -25,7 +25,9 @@ export interface CreateSiteResult {
   reload_required: boolean;
 }
 
-function writeSiteAsRoot(domain: string, content: string): Promise<void> {
+// Exported for update_site, which reuses this to write the config after
+// patching only the proxy_pass directive(s) rather than the full template.
+export function writeSiteAsRoot(domain: string, content: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const proc = spawn("sudo", ["/usr/local/bin/nginx-mcp-writesite", "write", domain], {
       stdio: ["pipe", "ignore", "pipe"],

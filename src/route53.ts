@@ -1,4 +1,9 @@
-import { Route53Client, ChangeResourceRecordSetsCommand, type RRType } from "@aws-sdk/client-route-53";
+import {
+  Route53Client,
+  ChangeResourceRecordSetsCommand,
+  ListResourceRecordSetsCommand,
+  type RRType,
+} from "@aws-sdk/client-route-53";
 
 export interface Route53Config {
   client: Route53Client;
@@ -76,6 +81,63 @@ export async function upsertRecord(
       change_id: result.ChangeInfo?.Id,
       change_status: result.ChangeInfo?.Status,
       message: `UPSERT submitted: ${name} (${type}, TTL ${ttl}) -> ${values.join(", ")}.`,
+    };
+  } catch (err: any) {
+    return { success: false, message: err.message ?? String(err) };
+  }
+}
+
+export interface DeleteRecordResult {
+  success: boolean;
+  change_id?: string;
+  change_status?: string;
+  message: string;
+}
+
+// Shared by delete_domain_record (CNAME) and delete_txt_record (TXT) - DELETE
+// requires the exact existing record (name, TTL, values), so look it up
+// rather than guessing what was passed to the corresponding create tool.
+export async function deleteRecord(
+  config: Route53Config,
+  name: string,
+  type: RRType
+): Promise<DeleteRecordResult> {
+  const { client, hostedZoneId } = config;
+
+  try {
+    const listResult = await client.send(
+      new ListResourceRecordSetsCommand({
+        HostedZoneId: hostedZoneId,
+        StartRecordName: name,
+        StartRecordType: type,
+        MaxItems: 1,
+      })
+    );
+
+    // Route 53 normalizes record names with a trailing dot; compare loosely
+    // against what the caller passed in.
+    const record = listResult.ResourceRecordSets?.[0];
+    if (!record || record.Type !== type || record.Name?.replace(/\.$/, "") !== name) {
+      return {
+        success: false,
+        message: `No ${type} record found for "${name}" in this hosted zone - nothing to delete.`,
+      };
+    }
+
+    const result = await client.send(
+      new ChangeResourceRecordSetsCommand({
+        HostedZoneId: hostedZoneId,
+        ChangeBatch: {
+          Comment: `nginx-certbot-mcp: DELETE ${type} for ${name}`,
+          Changes: [{ Action: "DELETE", ResourceRecordSet: record }],
+        },
+      })
+    );
+    return {
+      success: true,
+      change_id: result.ChangeInfo?.Id,
+      change_status: result.ChangeInfo?.Status,
+      message: `DELETE submitted for "${name}".`,
     };
   } catch (err: any) {
     return { success: false, message: err.message ?? String(err) };

@@ -39,8 +39,8 @@ const ENV_TEST_EXAMPLE = ".env.test.example";
 const ALL_TOOLS = [
   "list_sites", "get_site_config", "check_cert_expiry", "check_dns",
   "check_upstream_health", "get_nginx_status", "tail_site_logs", "list_archived_sites",
-  "create_domain_record", "delete_domain_record", "create_txt_record",
-  "create_site", "delete_site", "restore_site", "prune_archives",
+  "create_domain_record", "delete_domain_record", "create_txt_record", "delete_txt_record",
+  "create_site", "update_site", "delete_site", "restore_site", "prune_archives",
   "reload_nginx",
   "issue_cert", "issue_wildcard_cert", "renew_cert", "revoke_cert", "delete_cert",
 ];
@@ -231,7 +231,9 @@ async function cleanupTxtRecord(client, hostedZoneId, name) {
         HostedZoneId: hostedZoneId,
         ChangeBatch: { Changes: [{ Action: "DELETE", ResourceRecordSet: record }] },
       }));
-      console.log(`  (cleaned up test TXT record ${name} directly via AWS SDK - no delete_txt_record tool exists yet)`);
+      // Backstop only - the delete_txt_record step above should already have
+      // removed this in a normal successful run.
+      console.log(`  (cleaned up leftover test TXT record ${name} directly via AWS SDK)`);
     }
   } catch (err) {
     console.error(`  WARNING: could not clean up TXT record ${name}: ${err.message}`);
@@ -411,6 +413,15 @@ async function main() {
     const created = await step(client, "create_site", { domain: testSub, upstream_host: "127.0.0.1", upstream_port: 3000 }, (p) => p?.success === true);
     if (created.pass) {
       await step(client, "get_site_config", { domain: testSub }, (p) => p?.domain === testSub && typeof p?.raw_config === "string");
+      // Point it at a different upstream port and confirm the rewrite
+      // actually landed in the config, not just that the tool reported success.
+      const updated = await step(client, "update_site", { domain: testSub, upstream_host: "127.0.0.1", upstream_port: 3001 }, (p) => p?.success === true);
+      if (updated.pass) {
+        const { ok, parsed } = await client.callTool("get_site_config", { domain: testSub });
+        if (!ok || !parsed?.raw_config?.includes("127.0.0.1:3001")) {
+          console.log(`  WARNING: update_site reported success but proxy_pass doesn't show port 3001`);
+        }
+      }
       await step(client, "reload_nginx", {}, (p) => p?.success === true);
       await step(client, "tail_site_logs", { log_type: "access", lines: 5 }, (p) => p?.success === true);
       const deleted = await step(client, "delete_site", { domain: testSub, confirm: true }, (p) => p?.success === true);
@@ -425,14 +436,19 @@ async function main() {
         report("prune_archives", "skip", "blocked by delete_site failure");
       }
     } else {
-      for (const t of ["get_site_config", "reload_nginx", "tail_site_logs", "delete_site", "restore_site", "prune_archives"]) {
+      for (const t of ["get_site_config", "update_site", "reload_nginx", "tail_site_logs", "delete_site", "restore_site", "prune_archives"]) {
         report(t, "skip", "blocked by create_site failure");
       }
     }
 
     console.log("\n6. DNS (Route 53):");
     const dnsCreated = await step(client, "create_domain_record", { domain: testSub, target: testDomain, ttl: 60 }, (p) => p?.success === true);
-    await step(client, "create_txt_record", { domain: `_acme-challenge.${testSub}`, value: "test-value" }, (p) => p?.success === true);
+    const txtCreated = await step(client, "create_txt_record", { domain: `_acme-challenge.${testSub}`, value: "test-value" }, (p) => p?.success === true);
+    if (txtCreated.pass) {
+      await step(client, "delete_txt_record", { domain: `_acme-challenge.${testSub}`, confirm: true }, (p) => p?.success === true);
+    } else {
+      report("delete_txt_record", "skip", "blocked by create_txt_record failure");
+    }
     // In host mode, issue_cert (HTTP-01) needs this CNAME to still resolve
     // when we get to the Certificates phase below - defer the delete until
     // right after that attempt instead of testing it here.

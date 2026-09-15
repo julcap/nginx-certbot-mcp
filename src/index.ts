@@ -14,7 +14,9 @@ import { listArchivedSites } from "./tools/listArchivedSites.js";
 import { createDomainRecord } from "./tools/createDomainRecord.js";
 import { deleteDomainRecord } from "./tools/deleteDomainRecord.js";
 import { createTxtRecord } from "./tools/createTxtRecord.js";
+import { deleteTxtRecord } from "./tools/deleteTxtRecord.js";
 import { createSite } from "./tools/createSite.js";
+import { updateSite } from "./tools/updateSite.js";
 import { deleteSite } from "./tools/deleteSite.js";
 import { restoreSite } from "./tools/restoreSite.js";
 import { pruneArchives } from "./tools/pruneArchives.js";
@@ -294,8 +296,9 @@ server.registerTool(
     description:
       "Upsert a Route 53 TXT record - e.g. for an ACME DNS-01 challenge " +
       "(_acme-challenge.<domain>, as used by issue_wildcard_cert) or domain verification. " +
-      "Quotes the value automatically if the caller didn't. For a CNAME pointing a domain at an " +
-      "upstream, use create_domain_record instead.",
+      "Quotes the value automatically if the caller didn't. Clean up afterward with " +
+      "delete_txt_record. For a CNAME pointing a domain at an upstream, use create_domain_record " +
+      "instead.",
     inputSchema: {
       domain: z.string().describe("Record name, e.g. _acme-challenge.mysite.julcap.net"),
       value: z.string().describe("TXT record value; wrapped in double quotes automatically if not already"),
@@ -310,6 +313,28 @@ server.registerTool(
   }
 );
 
+server.registerTool(
+  "delete_txt_record",
+  {
+    description:
+      "Delete the Route 53 TXT record for a domain - e.g. to clean up an ACME DNS-01 challenge " +
+      "record left behind by create_txt_record or issue_wildcard_cert. Destructive - requires " +
+      "confirm:true to actually act; without it, returns what would happen and changes nothing. " +
+      "Looks up the exact existing record first rather than guessing its TTL/value. For a CNAME " +
+      "record, use delete_domain_record instead.",
+    inputSchema: {
+      domain: z.string().describe("Record name whose TXT record should be deleted, e.g. _acme-challenge.mysite.julcap.net"),
+      confirm: z.boolean().default(false).describe("Must be true to actually delete; false (default) is a dry run"),
+    },
+    outputSchema: route53ChangeResultShape,
+    annotations: { destructiveHint: true, idempotentHint: true, openWorldHint: true },
+  },
+  async ({ domain, confirm }) => {
+    const result = await deleteTxtRecord({ domain, confirm });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], structuredContent: result as unknown as Record<string, unknown> };
+  }
+);
+
 // --- Site lifecycle ---
 
 server.registerTool(
@@ -319,7 +344,8 @@ server.registerTool(
       "Create a new nginx server block from the websocket-capable default template. " +
       "Validates and test-renders (`nginx -t`) before touching live config, and rolls back " +
       "automatically if the test fails. Does NOT reload nginx or request a certificate - follow " +
-      "with reload_nginx to go live, then issue_cert to get SSL.",
+      "with reload_nginx to go live, then issue_cert to get SSL. To point an existing site at a " +
+      "different upstream later, use update_site instead of recreating it.",
     inputSchema: {
       domain: z.string().describe("Domain for the new server block, e.g. mysite.julcap.net"),
       upstream_host: z.string().describe("Hostname or IP nginx should proxy_pass to"),
@@ -335,6 +361,34 @@ server.registerTool(
   },
   async ({ domain, upstream_host, upstream_port }) => {
     const result = await createSite({ domain, upstream_host, upstream_port });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], structuredContent: result as unknown as Record<string, unknown> };
+  }
+);
+
+server.registerTool(
+  "update_site",
+  {
+    description:
+      "Update an existing site's upstream by rewriting its proxy_pass directive(s) in place - " +
+      "everything else in the config, including any SSL server block issue_cert/certbot added, " +
+      "is left untouched. Fails if the domain has no existing config (use create_site instead) " +
+      "or has no proxy_pass directive to update. Test-renders before keeping the change and " +
+      "rolls back automatically if `nginx -t` fails. Does NOT reload nginx - call reload_nginx " +
+      "afterward.",
+    inputSchema: {
+      domain: z.string().describe("Domain of the existing site to update"),
+      upstream_host: z.string().describe("New hostname or IP nginx should proxy_pass to"),
+      upstream_port: z.number().int().min(1).max(65535).describe("New TCP port on the upstream host"),
+    },
+    outputSchema: {
+      success: z.boolean(),
+      test_output: z.string().describe("Output of `nginx -t` against the rewritten config, or an explanatory message if nothing was changed"),
+      reload_required: z.boolean().describe("True on success - nginx has not actually been reloaded yet"),
+    },
+    annotations: { destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  async ({ domain, upstream_host, upstream_port }) => {
+    const result = await updateSite({ domain, upstream_host, upstream_port });
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], structuredContent: result as unknown as Record<string, unknown> };
   }
 );
