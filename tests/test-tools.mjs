@@ -55,13 +55,17 @@ function run(cmd, args, { capture = false } = {}) {
 
 class McpClient {
   constructor(env) {
-    this.proc = spawn("docker", [
+    const args = [
       "compose", "exec", "-T",
       "-e", `AWS_ACCESS_KEY_ID=${env.accessKeyId}`,
       "-e", `AWS_SECRET_ACCESS_KEY=${env.secretAccessKey}`,
       "-e", `ROUTE53_HOSTED_ZONE_ID=${env.hostedZoneId}`,
-      "sandbox", "node", "dist/index.js",
-    ]);
+    ];
+    // Optional - the tools default to us-east-1 themselves when unset, this
+    // just lets .env.test override that if ever needed.
+    if (env.awsDefaultRegion) args.push("-e", `AWS_DEFAULT_REGION=${env.awsDefaultRegion}`);
+    args.push("sandbox", "node", "dist/index.js");
+    this.proc = spawn("docker", args);
     this.buffer = "";
     this.pending = new Map();
     this.nextId = 1;
@@ -143,7 +147,9 @@ async function step(client, tool, args, predicate, timeoutMs) {
   if (!ok) { report(tool, "fail", detail); return { pass: false, parsed: null }; }
   const verdict = predicate ? predicate(parsed) : true;
   if (verdict === true || verdict == null) { report(tool, "pass"); return { pass: true, parsed }; }
-  report(tool, "fail", typeof verdict === "string" ? verdict : "unexpected result shape");
+  const reason = typeof verdict === "string" ? verdict : "unexpected result shape";
+  const toolMessage = parsed && typeof parsed === "object" ? (parsed.message ?? parsed.certbot_output) : null;
+  report(tool, "fail", toolMessage ? `${reason}: ${toolMessage}` : reason);
   return { pass: false, parsed };
 }
 
@@ -172,14 +178,19 @@ async function main() {
   }
   const env = parseEnv(readFileSync(ENV_TEST_PATH));
   const { AWS_ACCESS_KEY_ID: accessKeyId, AWS_SECRET_ACCESS_KEY: secretAccessKey,
-    ROUTE53_HOSTED_ZONE_ID: hostedZoneId, TEST_DOMAIN: testDomain } = env;
+    ROUTE53_HOSTED_ZONE_ID: hostedZoneId, TEST_DOMAIN: testDomain,
+    AWS_DEFAULT_REGION: awsDefaultRegion } = env;
   if (!accessKeyId || !secretAccessKey || !hostedZoneId || !testDomain) {
     console.error(`${ENV_TEST_PATH} is missing one of AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, ROUTE53_HOSTED_ZONE_ID, TEST_DOMAIN.`);
     process.exit(1);
   }
 
   console.log("1. Verifying AWS credentials and that TEST_DOMAIN is in this hosted zone...");
-  const route53 = new Route53Client({ credentials: { accessKeyId, secretAccessKey } });
+  // us-east-1: Route 53 is global, but the SDK still requires a signing region.
+  const route53 = new Route53Client({
+    region: awsDefaultRegion || "us-east-1",
+    credentials: { accessKeyId, secretAccessKey },
+  });
   let zoneApex;
   try {
     const zone = await route53.send(new GetHostedZoneCommand({ Id: hostedZoneId }));
@@ -197,17 +208,31 @@ async function main() {
   const label = `mcp-test-${randomBytes(4).toString("hex")}`;
   const testSub = `${label}.${testDomain}`;
 
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
   console.log(`\nWill run every MCP tool against the Docker sandbox, using "${testSub}" as a` +
     ` disposable subdomain. This creates and deletes real Route 53 records under "${zoneApex}".`);
-  const proceed = (await rl.question("Continue? [y/N] ")).trim().toLowerCase();
-  if (proceed !== "y" && proceed !== "yes") { rl.close(); process.exit(0); }
-  const certAnswer = (await rl.question(
-    "Also test certificate issuance (issue_wildcard_cert, renew_cert, revoke_cert, delete_cert)?\n" +
-    "Hits real Let's Encrypt staging, adds ~1-2 min. [y/N] "
-  )).trim().toLowerCase();
-  const includeCerts = certAnswer === "y" || certAnswer === "yes";
-  rl.close();
+
+  let includeCerts;
+  // Piping input into a script that's running detached from a real TTY
+  // (e.g. launched in the background) doesn't reliably reach a readline
+  // prompt - rather than hang or silently no-op on EOF, treat a
+  // non-interactive stdin as consent to proceed (you already had to run
+  // this deliberately) and gate the slower cert scenario behind an
+  // explicit --certs flag instead of a prompt.
+  if (process.stdin.isTTY) {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    const proceed = (await rl.question("Continue? [y/N] ")).trim().toLowerCase();
+    if (proceed !== "y" && proceed !== "yes") { rl.close(); process.exit(0); }
+    const certAnswer = (await rl.question(
+      "Also test certificate issuance (issue_wildcard_cert, renew_cert, revoke_cert, delete_cert)?\n" +
+      "Hits real Let's Encrypt staging, adds ~1-2 min. [y/N] "
+    )).trim().toLowerCase();
+    includeCerts = certAnswer === "y" || certAnswer === "yes";
+    rl.close();
+  } else {
+    includeCerts = process.argv.includes("--certs");
+    console.log(`Non-interactive stdin - proceeding automatically. ` +
+      `Certificate issuance tests: ${includeCerts ? "included (--certs)" : "skipped (pass --certs to include)"}.`);
+  }
 
   if (!existsSync(".env")) {
     copyFileSync(".env.example", ".env");
@@ -233,7 +258,7 @@ async function main() {
   }
   console.log("   OK");
 
-  const client = new McpClient({ accessKeyId, secretAccessKey, hostedZoneId });
+  const client = new McpClient({ accessKeyId, secretAccessKey, hostedZoneId, awsDefaultRegion });
   await client.initialize();
 
   try {

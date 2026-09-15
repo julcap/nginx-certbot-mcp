@@ -20,7 +20,15 @@ export function getRoute53Config(): Route53Config | { error: string } {
   }
 
   return {
-    client: new Route53Client({ credentials: { accessKeyId, secretAccessKey } }),
+    // Route 53 is a global service, but the SDK still requires a signing
+    // region - default to us-east-1 (AWS's own recommendation for it)
+    // rather than relying on an ambient AWS_REGION/~/.aws/config that won't
+    // exist on a freshly provisioned box (or in the Docker sandbox).
+    // AWS_DEFAULT_REGION lets that default be overridden if ever needed.
+    client: new Route53Client({
+      region: process.env.AWS_DEFAULT_REGION || "us-east-1",
+      credentials: { accessKeyId, secretAccessKey },
+    }),
     hostedZoneId,
   };
 }

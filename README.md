@@ -77,12 +77,42 @@ This installs two things:
 installed on the box (e.g. `apt install python3-certbot-dns-route53`) —
 this repo doesn't install it for you.
 
+## Network requirements for certificate issuance
+
+`issue_cert` and `issue_wildcard_cert` validate domain ownership two
+completely different ways, with different requirements on where the box
+sits on your network:
+
+- **`issue_cert` (HTTP-01)** — Let's Encrypt makes an inbound HTTP request
+  to the domain on port 80. That request goes to whatever your DNS resolves
+  the domain to (its public IP), and if you're behind a home/office router
+  doing NAT, the router then forwards it to **exactly one** private IP per
+  port-forwarding rule. This means: the machine running nginx (and this MCP
+  server) has to be the *specific* private IP your router forwards 80/443
+  to — not just any machine on your network, and not the Docker sandbox
+  (which sits at its own, different private IP on the Docker bridge
+  network). If you run multiple boxes/VMs behind one router, double-check
+  which one the port-forwarding rule actually targets before calling
+  `issue_cert` from it; calling it from the wrong box fails every time,
+  since the challenge request never reaches it.
+- **`issue_wildcard_cert` (DNS-01)** — validates by having `certbot-dns-route53`
+  create a TXT record in Route 53 for Let's Encrypt to look up. This is
+  outbound-only (the box calls the AWS API; nothing calls back in), so it
+  has no port-forwarding requirement at all and works identically from any
+  network, including the Docker sandbox.
+
+Either way, the domain's DNS still has to actually point at your public IP
+(`create_domain_record` handles that part) - DNS pointing correctly and
+port-forwarding pointing correctly are two separate requirements, and
+`issue_cert` needs both.
+
 ## Environment variables
 
 | Variable | Used by | Notes |
 |---|---|---|
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | `create_domain_record`, `delete_domain_record`, `create_txt_record`, `issue_wildcard_cert` | Credentials for a Route-53-scoped IAM user — no other AWS permissions needed |
 | `ROUTE53_HOSTED_ZONE_ID` | `create_domain_record`, `delete_domain_record`, `create_txt_record` | Find with `aws route53 list-hosted-zones-by-name --dns-name julcap.net` |
+| `AWS_DEFAULT_REGION` | `create_domain_record`, `delete_domain_record`, `create_txt_record`, `issue_wildcard_cert` | Optional — Route 53 is global, but the AWS SDK/boto3 still need a signing region; defaults to `us-east-1` if unset |
 
 ## Why a wrapper script instead of sudo on tee/ln/rm
 

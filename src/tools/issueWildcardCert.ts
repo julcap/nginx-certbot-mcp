@@ -54,10 +54,17 @@ export async function issueWildcardCert(
   }
 
   try {
-    // sudoers grants env_keep for exactly these two vars for this command -
-    // see scripts/install-sudoers.sh.
+    // sudoers grants env_keep for exactly these vars for this command - see
+    // scripts/install-sudoers.sh. AWS_DEFAULT_REGION: Route 53 is global,
+    // but certbot-dns-route53's boto3 client still wants a region hint,
+    // which won't exist via ~/.aws/config on a freshly provisioned box.
     const { stdout, stderr } = await execFileAsync("sudo", ["certbot", ...args], {
-      env: { ...process.env, AWS_ACCESS_KEY_ID: accessKeyId, AWS_SECRET_ACCESS_KEY: secretAccessKey },
+      env: {
+        ...process.env,
+        AWS_ACCESS_KEY_ID: accessKeyId,
+        AWS_SECRET_ACCESS_KEY: secretAccessKey,
+        AWS_DEFAULT_REGION: process.env.AWS_DEFAULT_REGION || "us-east-1",
+      },
     });
     return { success: true, certbot_output: stdout + stderr };
   } catch (err: any) {
