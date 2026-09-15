@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Installs the sudoers rule that lets the MCP server's user run nginx -t,
-# reload nginx, run certbot, and invoke the nginx-mcp-writesite wrapper
-# without a password prompt - nothing broader than that. Also keeps
+# reload/query nginx via systemctl, run certbot, and invoke the
+# nginx-mcp-writesite wrapper without a password prompt - nothing broader
+# than that. Also keeps
 # AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY through sudo (sudo strips the
 # environment by default) so `certbot --dns-route53` can see them for
 # issue_wildcard_cert - nothing else is preserved.
@@ -34,7 +35,7 @@ TMP_FILE="$(mktemp)"
 trap 'rm -f "$TMP_FILE"' EXIT
 
 cat > "$TMP_FILE" <<EOF
-$USER_NAME ALL=(root) NOPASSWD: /usr/sbin/nginx -t, /usr/bin/systemctl reload nginx, /usr/bin/certbot, /usr/local/bin/nginx-mcp-writesite
+$USER_NAME ALL=(root) NOPASSWD: /usr/sbin/nginx -t, /usr/bin/systemctl reload nginx, /usr/bin/systemctl is-active --quiet nginx, /usr/bin/certbot, /usr/local/bin/nginx-mcp-writesite
 Defaults:$USER_NAME env_keep += "AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY"
 EOF
 
