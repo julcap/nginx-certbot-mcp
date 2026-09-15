@@ -35,8 +35,26 @@ sudoers entry — do NOT run the whole server as root:
 
 ```
 # /etc/sudoers.d/nginx-mcp
-mcpuser ALL=(root) NOPASSWD: /usr/sbin/nginx -t, /usr/bin/systemctl reload nginx, /usr/bin/certbot
+mcpuser ALL=(root) NOPASSWD: /usr/sbin/nginx -t, /usr/bin/systemctl reload nginx, /usr/bin/certbot, /usr/local/bin/nginx-mcp-writesite
 ```
+
+## Why a wrapper script instead of sudo on tee/ln/rm
+
+The first pass granted passwordless sudo on generic file tools (`tee`, `ln`,
+`rm`). That works, but it's a wider trust boundary than the task needs -
+those commands can touch *any* root-owned file on the box, not just nginx
+site configs. If the MCP server process were ever compromised or triggered
+unexpectedly, the blast radius would be the whole filesystem.
+
+Instead, sudo is scoped to a single purpose-built script
+(`/usr/local/bin/nginx-mcp-writesite`) that only accepts a `<domain>`
+argument and only ever writes to paths under `/etc/nginx/sites-available/`
+and `/etc/nginx/sites-enabled/`. The script re-validates the domain itself
+(independent of the Node-side validation), so even a bug that let a bad
+domain through the TypeScript layer can't be used to write outside those
+two directories. The trade-off: one more artifact to deploy and keep in
+sync with the server, in exchange for sudo that can only ever do the one
+thing this project needs.
 
 ## Testing locally with the MCP Inspector
 

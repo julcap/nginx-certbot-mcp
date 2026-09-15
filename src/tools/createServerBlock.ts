@@ -1,5 +1,6 @@
 import { readFile, writeFile, symlink, unlink } from "node:fs/promises";
 import { execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
 import {
@@ -24,6 +25,19 @@ export interface CreateServerBlockResult {
   reload_required: boolean;
 }
 
+function writeSiteAsRoot(domain: string, content: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn("sudo", ["/usr/local/bin/nginx-mcp-writesite", "write", domain], {
+      stdio: ["pipe", "ignore", "pipe"],
+    });
+    let stderr = "";
+    proc.stderr.on("data", (d) => (stderr += d));
+    proc.on("error", reject);
+    proc.on("close", (code) => (code === 0 ? resolve() : reject(new Error(stderr || `exited ${code}`))));
+    proc.stdin.write(content);
+    proc.stdin.end();
+  });
+}
 export async function createServerBlock(
   input: CreateServerBlockInput
 ): Promise<CreateServerBlockResult> {
@@ -42,26 +56,24 @@ export async function createServerBlock(
     .replaceAll("{{UPSTREAM_PORT}}", String(upstream_port));
 
   const finalPath = path.join(NGINX_SITES_AVAILABLE, domain);
-  const enabledPath = path.join(NGINX_SITES_ENABLED, domain);
 
-  await writeFile(finalPath, rendered, "utf-8");
+  await writeSiteAsRoot(domain, rendered);
 
   try {
     const { stdout, stderr } = await execFileAsync("sudo", ["nginx", "-t"]);
-    await symlink(finalPath, enabledPath);
+    await execFileAsync("sudo", ["/usr/local/bin/nginx-mcp-writesite", "enable", domain]);
     return {
       success: true,
       config_path: finalPath,
       test_output: stdout + stderr,
-      reload_required: true,
+      reload_required: true
     };
   } catch (err: any) {
-    // Roll back - don't leave a broken config sitting in sites-available.
-    await unlink(finalPath);
+    await execFileAsync("sudo", ["/usr/local/bin/nginx-mcp-writesite", "remove", domain]);
     return {
       success: false,
       test_output: err.stderr ?? String(err),
-      reload_required: false,
+      reload_required: false
     };
   }
 }

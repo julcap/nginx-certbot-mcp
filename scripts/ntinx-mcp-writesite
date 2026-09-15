@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# nginx-mcp-writesite - narrow helper for nginx-certbot-mcp.
+# Only ever touches /etc/nginx/sites-available/<domain> and
+# /etc/nginx/sites-enabled/<domain> - nothing else on the filesystem.
+set -euo pipefail
+
+SITES_AVAILABLE="/etc/nginx/sites-available"
+SITES_ENABLED="/etc/nginx/sites-enabled"
+DOMAIN_RE='^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$'
+
+usage() { echo "Usage: $0 {write|enable|disable|remove} <domain>" >&2; exit 1; }
+
+[ $# -ge 2 ] || usage
+ACTION="$1"
+DOMAIN="$2"
+
+# Re-validates the domain independently of the Node code that calls this -
+# defense in depth, since this script is the actual privilege boundary.
+[[ "$DOMAIN" =~ $DOMAIN_RE ]] || { echo "Invalid domain: $DOMAIN" >&2; exit 1; }
+
+AVAILABLE_PATH="$SITES_AVAILABLE/$DOMAIN"
+ENABLED_PATH="$SITES_ENABLED/$DOMAIN"
+
+case "$ACTION" in
+  write)   cat > "$AVAILABLE_PATH" ;;             # content piped via stdin
+  enable)  ln -sf "$AVAILABLE_PATH" "$ENABLED_PATH" ;;
+  disable) rm -f "$ENABLED_PATH" ;;
+  remove)  rm -f "$AVAILABLE_PATH" ;;
+  *) usage ;;
+esac
