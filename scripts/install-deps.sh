@@ -50,7 +50,17 @@ PACKAGES=(
 [ "$SNAP_PLUGIN_OK" = false ] && PACKAGES+=(python3-certbot-dns-route53)
 
 echo "Refreshing apt package index..."
-$SUDO apt-get update -qq
+# `apt-get update` returns non-zero if ANY configured repo fails - including
+# unrelated third-party ones (a stale PPA, a NodeSource repo pinned to the
+# wrong release codename, etc.) that have nothing to do with the packages
+# below. Don't let that abort the whole script: Ubuntu's own repos (where
+# nginx/certbot/the plugins actually live) still get refreshed regardless,
+# and the per-package check further down already reports clearly if a
+# specific package genuinely isn't available.
+if ! $SUDO apt-get update -qq; then
+  echo "WARNING: apt-get update reported errors above (often a stale/unrelated third-party repo)" \
+    "- continuing anyway, since Ubuntu's own repos may still be fine." >&2
+fi
 
 status=0
 
