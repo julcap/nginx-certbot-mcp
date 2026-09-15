@@ -12,7 +12,9 @@
     "install:sudoers": "bash scripts/install-sudoers.sh",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
-    "inspect": "npx @modelcontextprotocol/inspector node dist/index.js"
+    "inspect": "npx @modelcontextprotocol/inspector node dist/index.js",
+    "check-deps": "bash scripts/install-deps.sh",
+    "test:dns": "npm run build && node scripts/test-dns-roundtrip.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-route-53": "^3.1132.0",
