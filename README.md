@@ -139,12 +139,15 @@ Add to your MCP client config (path varies by client):
 
 ## Next steps
 
-1. Test `issue_cert` against **staging only** first — flipping `staging:false`
-   against production before you trust the flow risks burning your real
-   Let's Encrypt rate limit.
-2. `delete_site` and `renew_cert` are implemented but not yet exercised
-   against a real box — dry-run `renew_cert` and try `delete_site` on a
-   non-critical domain first before trusting either in production.
+1. Test `issue_cert` / `issue_wildcard_cert` against **staging only** first —
+   flipping `staging:false` against production before you trust the flow
+   risks burning your real Let's Encrypt rate limit.
+2. None of the tools above have been exercised against a real box yet —
+   dry-run `renew_cert`, and try the destructive ones (`delete_site`,
+   `restore_site`, `prune_archives`, `revoke_cert`, `delete_cert`,
+   `delete_domain_record`) against a non-critical domain first.
+3. Install the `certbot-dns-route53` plugin before trying `issue_wildcard_cert`
+   — see Required permissions.
 
 ## Contributing
 
