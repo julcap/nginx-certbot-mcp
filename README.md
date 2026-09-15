@@ -1,7 +1,14 @@
 # nginx-certbot-mcp
 
-MCP server for reading nginx config and managing reverse proxy hosts + SSL
-certs via certbot. See `../nginx-mcp-tool-spec.md` for the full design.
+Let AI agents manage production web infrastructure without giving them root shell access.
+
+nginx-certbot-mcp is a safety-first MCP server for provisioning Nginx reverse proxies, DNS records and Let's Encrypt certificates through narrowly scoped, auditable operations.
+
+Instead of exposing arbitrary shell commands, privileged actions are restricted through purpose-built wrappers and least-privilege sudo rules.
+
+## Architecture
+
+![nginx-certbot-mcp architecture](docs/architecture.png)
 
 ## Status
 
