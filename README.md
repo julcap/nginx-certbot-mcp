@@ -30,7 +30,7 @@ Instead of exposing arbitrary shell commands, privileged actions are restricted 
 | `restore_site` | ✅ implemented — re-enables from the newest (or a chosen) archive; requires `confirm:true`             |
 | `prune_archives` | ✅ implemented — deletes archives older than N days; requires `confirm:true`                           |
 | `reload_nginx` | ✅ implemented                                                           |
-| `issue_cert` | 🚧 partly implemented — defaults to LE staging, includes a DNS pre-check                              |
+| `issue_cert` | ✅ implemented — defaults to LE staging, includes a DNS pre-check                              |
 | `issue_wildcard_cert` | 🚧 partly implemented — needs certbot-dns-route53 installed on the box (see Required permissions)     |
 | `renew_cert` | ✅ implemented — `certbot renew`, defaults to `--dry-run`                                              |
 | `revoke_cert` | ✅ implemented — leaves cert files on disk; requires `confirm:true`                                    |
