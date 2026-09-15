@@ -143,14 +143,21 @@ Four layers, from "needs almost nothing" to "exercises everything":
 ### 1. Check/install dependencies
 
 ```bash
-npm run check-deps
+npm run install:deps
 ```
 
 Debian/Ubuntu only. Idempotent: installs `nginx`, `certbot`,
 `python3-certbot-nginx`, and `python3-certbot-dns-route53` if missing. If
-they're already installed it only reports whether the installed version is
-current or older than what's available — it never silently upgrades a
-package that might already be serving traffic; it prints the `apt-get`
+`certbot` turns out to already be a **snap** install (common - certbot's own
+docs recommend snap over apt's often-outdated package), it installs
+`certbot-dns-route53` as a snap plugin instead: an apt-installed plugin is
+completely invisible to snap certbot's isolated Python environment, which
+surfaces later as `issue_wildcard_cert` failing with "The requested
+dns-route53 plugin does not appear to be installed" even though `dpkg`
+thinks it's there. If packages are already installed it only reports
+whether the version is current or older than what's available — it never
+silently upgrades a package that might already be serving traffic; it
+prints the `apt-get`
 command to run yourself if you want that. Also reports your Node version
 against the >=20 that `@aws-sdk/client-route-53` will eventually require.
 
@@ -228,8 +235,9 @@ Two targets, with one real difference - `issue_cert` (HTTP-01):
   this machine instead of in Docker. This is the only way to test
   `issue_cert` for real, since it needs the box that's actually reachable
   on port 80/443 (see Network requirements above) - if this is that box,
-  the cert scenario tests `issue_cert` too, waiting up to 60s for the
-  disposable CNAME to propagate before attempting it. **Everything this
+  the cert scenario tests `issue_cert` too, waiting up to 300s (10 attempts,
+  30s apart) for the disposable CNAME to propagate before attempting it.
+  **Everything this
   touches is real production state, not a sandbox** - real nginx config,
   real certbot, real DNS - so treat it accordingly. It refuses to run at
   all unless passwordless sudo already works for the user running it (i.e.

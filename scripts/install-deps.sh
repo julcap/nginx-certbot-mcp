@@ -14,12 +14,41 @@ set -euo pipefail
 SUDO=""
 [ "$(id -u)" -ne 0 ] && SUDO="sudo"
 
+# certbot's own docs recommend installing it via snap rather than apt (apt's
+# package is often outdated) - many boxes already have it that way. snap
+# certbot is a fully isolated Python environment, so an apt-installed
+# python3-certbot-dns-route53 is completely invisible to it ("The requested
+# dns-route53 plugin does not appear to be installed", even though dpkg
+# thinks it's there) - it needs the plugin installed as its own snap instead.
+CERTBOT_IS_SNAP=false
+CERTBOT_PATH="$(command -v certbot 2>/dev/null || true)"
+if [ -n "$CERTBOT_PATH" ] && readlink -f "$CERTBOT_PATH" 2>/dev/null | grep -q '^/snap/'; then
+  CERTBOT_IS_SNAP=true
+fi
+
+if [ "$CERTBOT_IS_SNAP" = true ]; then
+  if snap list certbot-dns-route53 >/dev/null 2>&1; then
+    echo "[certbot-dns-route53] up to date (snap plugin already installed)"
+  else
+    echo "[certbot] is a snap install ($CERTBOT_PATH) - installing certbot-dns-route53 as a snap" \
+      "plugin instead of via apt (the apt package would be invisible to snap certbot)."
+    $SUDO snap install certbot-dns-route53
+  fi
+  $SUDO snap set certbot trust-plugin-with-root=ok
+  if dpkg-query -W python3-certbot-dns-route53 >/dev/null 2>&1; then
+    echo "[certbot] NOTE: python3-certbot-dns-route53 is also installed via apt, but snap certbot" \
+      "can't see it - it's dead weight, not a conflict. Safe to leave or 'sudo apt-get remove' it."
+  fi
+fi
+
 PACKAGES=(
   nginx
   certbot
   python3-certbot-nginx        # certbot's nginx plugin - needed by issue_cert
-  python3-certbot-dns-route53  # needed by issue_wildcard_cert
 )
+# Skip the apt dns-route53 plugin entirely when certbot is a snap install -
+# see above, it would just be inert weight, not a working plugin.
+[ "$CERTBOT_IS_SNAP" = false ] && PACKAGES+=(python3-certbot-dns-route53)
 
 echo "Refreshing apt package index..."
 $SUDO apt-get update -qq

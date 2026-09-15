@@ -387,17 +387,17 @@ async function main() {
     console.log("\n7. Certificates:");
     if (hostMode && includeCerts) {
       if (dnsCreated.pass) {
-        console.log("   Waiting up to 60s for DNS propagation before issue_cert...");
+        console.log("   Waiting up to 300s (10 attempts, 30s apart) for DNS propagation before issue_cert...");
         let resolved = false;
-        for (let i = 0; i < 12; i++) {
+        for (let i = 0; i < 10; i++) {
           const { ok, parsed } = await client.callTool("check_dns", { domain: testSub });
           if (ok && parsed?.resolves) { resolved = true; break; }
-          await sleep(5000);
+          await sleep(30000);
         }
         if (resolved) {
           await step(client, "issue_cert", { domain: testSub, staging: true }, (p) => p?.success === true, 120000);
         } else {
-          report("issue_cert", "skip", "DNS didn't propagate within 60s - can't attempt HTTP-01");
+          report("issue_cert", "skip", "DNS didn't propagate within 300s - can't attempt HTTP-01");
         }
         await step(client, "delete_domain_record", { domain: testSub, confirm: true }, (p) => p?.success === true);
       } else {
