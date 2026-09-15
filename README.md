@@ -68,9 +68,9 @@ This installs two things:
 2. **`/etc/sudoers.d/nginx-mcp`** — grants `mcpuser` passwordless sudo on
    exactly: `nginx -t`, `systemctl reload nginx`, `systemctl is-active
    --quiet nginx`, `certbot`, and the wrapper script above. Nothing
-   broader. It also keeps
-   `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` through sudo (which strips
-   the environment by default) so `certbot --dns-route53` can see them for
+   broader. It also keeps `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/
+   `AWS_DEFAULT_REGION` through sudo (which strips the environment by
+   default) so `certbot --dns-route53` can see them for
    `issue_wildcard_cert` — no other environment variables are preserved.
 
 `issue_wildcard_cert` additionally needs the `certbot-dns-route53` plugin
