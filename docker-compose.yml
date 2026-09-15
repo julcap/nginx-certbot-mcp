@@ -1,0 +1,17 @@
+services:
+  sandbox:
+    build: .
+    image: nginx-certbot-mcp:sandbox
+    container_name: nginx-certbot-mcp-sandbox
+    privileged: true
+    cgroup: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    env_file:
+      - .env
+    ports:
+      - "6274:6274"
+      - "6277:6277"
+    tmpfs:
+      - /run
+      - /run/lock
