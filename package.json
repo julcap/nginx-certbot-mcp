@@ -15,7 +15,8 @@
     "inspect": "npx @modelcontextprotocol/inspector node dist/index.js",
     "check-deps": "bash scripts/install-deps.sh",
     "test:dns": "npm run build && node tests/test-dns-roundtrip.mjs",
-    "test:tools": "npm run build && node tests/test-tools.mjs"
+    "test:tools": "npm run build && node tests/test-tools.mjs",
+    "test:tools:host": "npm run build && node tests/test-tools.mjs --host"
   },
   "dependencies": {
     "@aws-sdk/client-route-53": "^3.1132.0",

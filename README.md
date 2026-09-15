@@ -195,17 +195,15 @@ install every rebuild).
 
 ```bash
 cp .env.test.example .env.test   # fill in AWS credentials + a domain you control
-npm run test:tools
+npm run test:tools               # against the Docker sandbox
+npm run test:tools:host          # against this machine directly
 ```
 
-Drives every registered MCP tool over the real stdio JSON-RPC protocol
-against the Docker sandbox (starting it via `docker compose up -d --build`
-if it isn't already running), and prints ✓/✗/– per tool. `.env.test` is
-separate from `.env`: it's read on the host, and its credentials get
-injected into each `docker compose exec` call directly, so `.env` and
-`.env.test` never need to match - `.env` only has to exist for `docker
-compose up` to start at all (the runner creates a blank one from
-`.env.example` automatically if it's missing).
+Drives every registered MCP tool over the real stdio JSON-RPC protocol -
+the same way a real MCP client would - and prints ✓/✗/– per tool.
+`.env.test` is separate from `.env`: it's read on the host, and its
+credentials get injected directly into each MCP server process the runner
+spawns, so `.env` and `.env.test` never need to match.
 
 Before touching anything it verifies your AWS credentials work and that
 `TEST_DOMAIN` is actually the zone's apex or a subdomain of it - refusing
@@ -213,11 +211,35 @@ to run against a domain the hosted zone doesn't control. Everything then
 runs under a random `mcp-test-<random>.<TEST_DOMAIN>` subdomain, self-cleans
 after each phase, and does a final best-effort cleanup pass regardless of
 what passed or failed. You'll be asked once, interactively, whether to also
-exercise certificate issuance (`issue_wildcard_cert`, `renew_cert`,
-`revoke_cert`, `delete_cert`) - it hits real Let's Encrypt staging and adds
-a minute or two, so it's opt-in. `issue_cert` (HTTP-01) is always skipped,
-since it needs the sandbox to be reachable on port 80 from the internet,
-which it isn't by default.
+exercise certificate issuance - it hits real Let's Encrypt staging and adds
+a minute or two, so it's opt-in (pass `--certs` for a non-interactive run,
+e.g. `npm run test:tools:host -- --certs`).
+
+Two targets, with one real difference - `issue_cert` (HTTP-01):
+
+- **`npm run test:tools`** (default) - the Docker sandbox. Starts it via
+  `docker compose up -d --build` if it isn't already running (`.env` only
+  has to exist for that, and gets created blank from `.env.example`
+  automatically if missing). Disposable and self-contained, but not
+  reachable from the internet on port 80, so `issue_cert` is always
+  skipped - only `issue_wildcard_cert` (DNS-01, `renew_cert`, `revoke_cert`,
+  `delete_cert` get exercised as part of the cert scenario.
+- **`npm run test:tools:host`** - runs `node dist/index.js` directly on
+  this machine instead of in Docker. This is the only way to test
+  `issue_cert` for real, since it needs the box that's actually reachable
+  on port 80/443 (see Network requirements above) - if this is that box,
+  the cert scenario tests `issue_cert` too, waiting up to 60s for the
+  disposable CNAME to propagate before attempting it. **Everything this
+  touches is real production state, not a sandbox** - real nginx config,
+  real certbot, real DNS - so treat it accordingly. It refuses to run at
+  all unless passwordless sudo already works for the user running it (i.e.
+  you've run `npm run setup -- <user>` for that user already).
+
+`renew_cert`'s dry-run has occasionally hung past its timeout during
+development (certbot holds a global lock while it's running, and a
+client-side timeout can't kill the remote process) - if a run seems stuck,
+check for and kill any stray `certbot` process, then `docker compose down`
+(sandbox) to start clean.
 
 ## Testing locally with the MCP Inspector
 
