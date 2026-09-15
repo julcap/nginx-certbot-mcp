@@ -5,17 +5,17 @@ certs via certbot. See `../nginx-mcp-tool-spec.md` for the full design.
 
 ## Status
 
-| Tool | Status |
-|---|---|
-| `list_sites` | ✅ implemented |
-| `get_site_config` | ✅ implemented |
-| `check_cert_expiry` | ✅ implemented |
-| `create_domain_record` | ✅ implemented — Route 53 CNAME via UPSERT |
+| Tool | Status                                                                                                 |
+|---|--------------------------------------------------------------------------------------------------------|
+| `list_sites` | ✅ implemented                                                                                         |
+| `get_site_config` | ✅ implemented                                                                                         |
+| `check_cert_expiry` | ✅ implemented                                                                                         |
+| `create_domain_record` | ✅ implemented — Route 53 CNAME via UPSERT                                                             |
 | `create_server_block` | ✅ implemented — writes/tests/enables via the `nginx-mcp-writesite` wrapper (see Required permissions) |
-| `reload_nginx` | ✅ implemented — needs sudoers entry below |
-| `issue_cert` | ✅ implemented — needs sudoers entry, defaults to LE staging |
-| `remove_site` | ⬜ not started |
-| `renew_cert` | ⬜ not started |
+| `reload_nginx` | ✅ implemented — needs sudoers entry below                                                             |
+| `issue_cert` | 🚧 partly implemented — needs sudoers entry, defaults to LE staging                                    |
+| `remove_site` | ⬜ not started                                                                                         |
+| `renew_cert` | ⬜ not started                                                                                         |
 
 The read-only tools are real and safe to run against your actual nginx setup
 right now. The mutating ones are intentionally left as guarded stubs — finish
