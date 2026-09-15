@@ -553,10 +553,15 @@ async function main() {
     : failures === 0 ? "All tested tools passed." : `${failures} tool(s) failed.`;
   console.log(`\n${summary}` +
     (hostMode ? "" : " Sandbox is still running - `docker compose down` when you're done."));
-  process.exitCode = cancelled ? 130 : failures === 0 ? 0 : 1;
+  // The SIGINT listener registered above for Ctrl+C cancellation keeps a
+  // signal-watcher handle open for the life of the process - Node won't
+  // exit on its own just because main() returned. Exit explicitly now that
+  // we're actually done, instead of leaving the process hanging until the
+  // user sends a signal themselves.
+  process.exit(cancelled ? 130 : failures === 0 ? 0 : 1);
 }
 
 main().catch((err) => {
   console.error(`\nFAIL: ${err.stack ?? err}`);
-  process.exitCode = 1;
+  process.exit(1);
 });
