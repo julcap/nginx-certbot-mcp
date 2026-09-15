@@ -245,12 +245,42 @@ async function main() {
     // sudo without a password only works for the user npm run setup was run
     // for - fail fast with a clear message instead of every sudo-backed
     // tool call hanging on a password prompt that will never come.
+    //
+    // A bare `sudo -n true` isn't enough to actually confirm this: it
+    // passes as long as the current user has *any* passwordless sudo at
+    // all, even from something unrelated to this project (common on a
+    // personal dev box where the primary login user already has broad
+    // sudo). That gives a false green light and then fails later, deep
+    // inside issue_wildcard_cert, with a confusing "Unable to locate
+    // credentials" - since AWS_ACCESS_KEY_ID/etc only survive sudo via the
+    // env_keep line this project's setup adds specifically for the user it
+    // was run for. Check for that line by name instead of just "does sudo
+    // work at all".
+    let sudoOutput = "";
     try {
-      await run("sudo", ["-n", "true"], { capture: true });
+      sudoOutput = (await run("sudo", ["-n", "-l"], { capture: true })).stdout;
     } catch {
       console.error(
         "sudo -n failed for the current user - host mode needs to run as the user " +
         "`npm run setup -- <user>` was configured for (see README's Required permissions)."
+      );
+      process.exit(1);
+    }
+    if (!sudoOutput.includes("certbot")) {
+      console.error(
+        "sudo works for the current user, but not through this project's narrow grant " +
+        "(no mention of certbot in `sudo -n -l`) - looks like a different, unrelated sudo " +
+        "grant. Run `npm run setup -- $(whoami)` for this user specifically."
+      );
+      process.exit(1);
+    }
+    if (!sudoOutput.includes("AWS_ACCESS_KEY_ID")) {
+      console.error(
+        "sudo works for the current user via this project's grant, but it's missing the " +
+        "env_keep line for AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY/AWS_DEFAULT_REGION - " +
+        "issue_wildcard_cert will fail with \"Unable to locate credentials\". Re-run " +
+        "`npm run setup -- $(whoami)` to refresh it (install-sudoers.sh is idempotent, but " +
+        "only reinstalls when its content actually changed since last run)."
       );
       process.exit(1);
     }
@@ -445,7 +475,9 @@ async function main() {
         } else {
           report("issue_cert", "skip", `DNS didn't propagate within ${(attempts * intervalMs) / 1000}s - can't attempt HTTP-01`);
         }
-        await step(client, "delete_domain_record", { domain: testSub, confirm: true }, (p) => p?.success === true);
+        // NOT deleting testSub's CNAME here: if issue_cert succeeded,
+        // renew_cert below re-validates via HTTP-01 too and needs it to
+        // still resolve - deferred until after the whole cert chain.
       } else {
         report("issue_cert", "skip", "blocked by create_domain_record failure");
         report("delete_domain_record", "skip", "blocked by create_domain_record failure");
@@ -481,6 +513,16 @@ async function main() {
     } else {
       const reason = cancelled ? "cancelled by user" : !includeCerts ? "cert scenario declined" : "no certificate was issued to test against";
       for (const t of ["renew_cert", "revoke_cert", "delete_cert"]) report(t, "skip", reason);
+    }
+
+    // The deferred delete_domain_record test from step 6, above - now safe
+    // to run since nothing left in the cert chain needs testSub to resolve.
+    if (deferDnsCleanup) {
+      if (dnsCreated.pass) {
+        await step(client, "delete_domain_record", { domain: testSub, confirm: true }, (p) => p?.success === true);
+      } else {
+        report("delete_domain_record", "skip", "blocked by create_domain_record failure");
+      }
     }
   } finally {
     console.log("\n8. Best-effort cleanup...");
