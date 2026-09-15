@@ -2,7 +2,6 @@ import { readFile, writeFile, symlink, unlink } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
-import os from "node:os";
 import {
   NGINX_SITES_AVAILABLE,
   NGINX_SITES_ENABLED,
@@ -42,27 +41,27 @@ export async function createServerBlock(
     .replaceAll("{{UPSTREAM_HOST}}", upstream_host)
     .replaceAll("{{UPSTREAM_PORT}}", String(upstream_port));
 
-  // Write to a temp path first and test THAT, not the live config directly.
-  const tempPath = path.join(os.tmpdir(), `nginx-test-${domain}.conf`);
-  await writeFile(tempPath, rendered, "utf-8");
+  const finalPath = path.join(NGINX_SITES_AVAILABLE, domain);
+  const enabledPath = path.join(NGINX_SITES_ENABLED, domain);
 
-  // TODO: `nginx -t` only validates the whole active config set, not a lone file.
-  // Real implementation: copy tempPath into sites-available first, run `nginx -t`,
-  // and roll back (delete the file) if the test fails. Sketch:
-  //
-  // const finalPath = path.join(NGINX_SITES_AVAILABLE, domain);
-  // await writeFile(finalPath, rendered, "utf-8");
-  // try {
-  //   const { stdout, stderr } = await execFileAsync("nginx", ["-t"]);
-  //   await symlink(finalPath, path.join(NGINX_SITES_ENABLED, domain));
-  //   return { success: true, config_path: finalPath, test_output: stdout + stderr, reload_required: true };
-  // } catch (err: any) {
-  //   await unlink(finalPath); // roll back
-  //   return { success: false, test_output: err.stderr ?? String(err), reload_required: false };
-  // }
+  await writeFile(finalPath, rendered, "utf-8");
 
-  throw new Error(
-    "Not yet implemented - see TODO in createServerBlock.ts. " +
-      `Rendered config is ready at ${tempPath} for manual inspection.`
-  );
+  try {
+    const { stdout, stderr } = await execFileAsync("sudo", ["nginx", "-t"]);
+    await symlink(finalPath, enabledPath);
+    return {
+      success: true,
+      config_path: finalPath,
+      test_output: stdout + stderr,
+      reload_required: true,
+    };
+  } catch (err: any) {
+    // Roll back - don't leave a broken config sitting in sites-available.
+    await unlink(finalPath);
+    return {
+      success: false,
+      test_output: err.stderr ?? String(err),
+      reload_required: false,
+    };
+  }
 }
