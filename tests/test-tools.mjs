@@ -56,7 +56,13 @@ function run(cmd, args, { capture = false } = {}) {
 class McpClient {
   constructor(env) {
     const args = [
-      "compose", "exec", "-T",
+      // -u mcpuser: without this, `compose exec` defaults to the container's
+      // CMD user (root, since systemd needs it as PID 1) - that would test
+      // against root's own unrestricted sudo policy instead of mcpuser's
+      // narrow, env_keep-scoped one, silently hiding real privilege-boundary
+      // bugs (this is exactly how the AWS_DEFAULT_REGION env-passthrough
+      // bug in issue_wildcard_cert stayed invisible until now).
+      "compose", "exec", "-T", "-u", "mcpuser",
       "-e", `AWS_ACCESS_KEY_ID=${env.accessKeyId}`,
       "-e", `AWS_SECRET_ACCESS_KEY=${env.secretAccessKey}`,
       "-e", `ROUTE53_HOSTED_ZONE_ID=${env.hostedZoneId}`,
@@ -117,7 +123,16 @@ class McpClient {
   }
 
   async callTool(name, args, timeoutMs) {
-    const res = await this._send("tools/call", { name, arguments: args }, timeoutMs);
+    // A timeout/transport error here is a rejected promise, not a JSON-RPC
+    // error response - catch it too, so one slow/stuck tool call reports as
+    // a single failure instead of crashing the whole run before the
+    // remaining steps (and the summary table) get a chance to happen.
+    let res;
+    try {
+      res = await this._send("tools/call", { name, arguments: args }, timeoutMs);
+    } catch (err) {
+      return { ok: false, detail: err.message };
+    }
     if (res.error) return { ok: false, detail: res.error.message };
     if (res.result?.isError) {
       const text = res.result?.content?.map((c) => c.text).join(" ") ?? "tool reported an error";
@@ -307,7 +322,9 @@ async function main() {
     if (includeCerts) {
       const issued = await step(client, "issue_wildcard_cert", { domain: testSub, staging: true }, (p) => p?.success === true, 180000);
       if (issued.pass) {
-        await step(client, "renew_cert", { domain: testSub, dry_run: true }, (p) => p?.success === true, 120000);
+        // Same 180s budget as issue_wildcard_cert - a dry-run renewal still
+        // does the full DNS-01 create/propagate/validate/cleanup dance.
+        await step(client, "renew_cert", { domain: testSub, dry_run: true }, (p) => p?.success === true, 180000);
         await step(client, "revoke_cert", { domain: testSub, confirm: true }, (p) => p?.success === true);
         await step(client, "delete_cert", { domain: testSub, confirm: true }, (p) => p?.success === true);
       } else {
