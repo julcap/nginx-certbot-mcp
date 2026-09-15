@@ -1,0 +1,9 @@
+{
+  "$schema": "https://glama.ai/mcp/schemas/server.json",
+  "maintainers": ["julcap"],
+  "name": "nginx-certbot-mcp",
+  "description": "MCP server to read nginx config and manage reverse proxy hosts + SSL certs via certbot",
+  "repository": "https://github.com/julcap/nginx-certbot-mcp",
+  "license": "Elastic-2.0",
+  "runtime": "node"
+}
