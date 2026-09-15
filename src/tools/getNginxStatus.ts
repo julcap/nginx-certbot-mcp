@@ -8,11 +8,14 @@ export interface NginxStatus {
   version: string;
 }
 
-// Both commands are safe to run as any user - no sudo needed.
 export async function getNginxStatus(): Promise<NginxStatus> {
   let running: boolean;
   try {
-    await execFileAsync("systemctl", ["is-active", "--quiet", "nginx"]);
+    // Without sudo, a non-root `systemctl is-active` needs a D-Bus session
+    // that isn't guaranteed to exist (e.g. minimal containers have no dbus
+    // installed at all) - go through sudo like reload_nginx does, rather
+    // than depending on that.
+    await execFileAsync("sudo", ["systemctl", "is-active", "--quiet", "nginx"]);
     running = true;
   } catch {
     running = false;
