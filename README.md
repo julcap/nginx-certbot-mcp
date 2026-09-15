@@ -1,5 +1,7 @@
 # nginx-certbot-mcp
 
+[![CI](https://github.com/julcap/nginx-certbot-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/julcap/nginx-certbot-mcp/actions/workflows/ci.yml)
+
 Let AI agents manage production web infrastructure without giving them root shell access.
 
 nginx-certbot-mcp provisions Nginx reverse proxies, DNS records, and Let's
