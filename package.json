@@ -10,10 +10,10 @@
     "setup": "bash scripts/setup.sh",
     "install:wrapper": "bash scripts/install.sh",
     "install:sudoers": "bash scripts/install-sudoers.sh",
+    "install:deps": "bash scripts/install-deps.sh",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "inspect": "npx @modelcontextprotocol/inspector node dist/index.js",
-    "check-deps": "bash scripts/install-deps.sh",
     "test:dns": "npm run build && node tests/test-dns-roundtrip.mjs",
     "test:tools": "npm run build && node tests/test-tools.mjs",
     "test:tools:host": "npm run build && node tests/test-tools.mjs --host"
