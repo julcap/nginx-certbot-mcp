@@ -14,7 +14,7 @@ script](#why-a-wrapper-script-instead-of-sudo-on-teelnrm) below).
 
 ## Tools
 
-All 21 are implemented and exercised against real infrastructure — see
+All 23 are implemented and exercised against real infrastructure — see
 [Testing](#testing).
 
 | Tool | Description |
@@ -30,7 +30,9 @@ All 21 are implemented and exercised against real infrastructure — see
 | `create_domain_record` | Upsert a Route 53 CNAME |
 | `delete_domain_record` | Delete a Route 53 CNAME — `confirm:true` |
 | `create_txt_record` | Upsert a Route 53 TXT record, e.g. for ACME DNS-01 |
+| `delete_txt_record` | Delete a Route 53 TXT record — `confirm:true` |
 | `create_site` | Create a websocket-capable nginx server block from the default template |
+| `update_site` | Rewrite an existing site's `proxy_pass` upstream in place |
 | `delete_site` | Disable, archive, and delete a server block — `confirm:true` |
 | `restore_site` | Re-enable a site from its newest (or a chosen) archive — `confirm:true` |
 | `prune_archives` | Delete archives older than N days — `confirm:true` |
