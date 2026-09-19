@@ -226,6 +226,32 @@ config that is *valid* but wrong (the wrong upstream, say).
 - `reload_nginx` still only reloads a config that passes `nginx -t`; when
   it refuses, its `hint` points at `rollback_site`.
 
+### Production issuance guard
+
+Let's Encrypt's production rate limits punish retry loops, and a lockout can
+last a week. `issue_cert` and `issue_wildcard_cert` keep a local history of
+production (`staging:false`) attempts and refuse a request that would
+exceed a limit — before spending it:
+
+| Limit | Guard refuses when |
+|---|---|
+| Duplicate certificates | 5 certs for the exact same set of names in 7 days |
+| Failed validations | 5 failed validations for a name in 1 hour |
+| Certificates per registered domain | 50 certs for one registered domain in 7 days |
+
+A refusal says which limit was hit and when to retry; a `Heads-up` note in
+`rate_limit_note` appears as a limit gets close. Staging requests are never
+counted or refused.
+
+- It counts only what was issued through this server, so it's a guard rail,
+  not a substitute for Let's Encrypt's own limits. "Registered domain" is
+  approximated from the last two labels (three under `co.uk`-style suffixes).
+- Only failures that reached validation count towards the failed-validation
+  limit; a missing sudo rule or a missing nginx block doesn't.
+- History lives in `issuance.json` under `MCP_STATE_DIR` (default
+  `~/.nginx-certbot-mcp/`, mode `0600`) and is pruned after 7 days. Set
+  `RATE_LIMIT_GUARD=off` to disable the guard.
+
 ## Environment variables
 
 | Variable | Used by | Notes |
@@ -237,6 +263,8 @@ config that is *valid* but wrong (the wrong upstream, say).
 | `MCP_MODE` | All tools | Optional — `readwrite` (default) or `readonly`. See [Read-only mode](#read-only-mode-and-tool-allowlist) |
 | `MCP_ENABLED_TOOLS` | All tools | Optional — comma-separated tool names / `*` patterns to expose; default all |
 | `ALLOWED_DOMAINS` | All tools taking a `domain` | Optional — comma-separated `example.com` / `*.example.com` entries the agent may act on; default any. See [Domain allowlist](#domain-allowlist) |
+| `RATE_LIMIT_GUARD` | `issue_cert`, `issue_wildcard_cert` | Optional — `off` disables the [production issuance guard](#production-issuance-guard) |
+| `MCP_STATE_DIR` | `issue_cert`, `issue_wildcard_cert` | Optional — where the guard keeps its issuance history; default `~/.nginx-certbot-mcp` |
 | `AUDIT_LOG_READS` | Read-only tools | Optional — `true` also audits read-only calls |
 
 ## Testing

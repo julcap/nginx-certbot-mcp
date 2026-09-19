@@ -602,7 +602,9 @@ registerTool(
       "certs but is exempt from rate limits - pass staging:false only when you're ready for a " +
       "real, publicly CT-logged certificate: production Let's Encrypt enforces real per-domain " +
       "issuance rate limits (a handful of certs per week), and a mis-issued cert isn't silently " +
-      "undone - call revoke_cert if you need to invalidate one. For a *.domain wildcard, use " +
+      "undone - call revoke_cert if you need to invalidate one. A local guard also refuses " +
+      "production requests that would exceed Let's Encrypt's duplicate-certificate, " +
+      "failed-validation or per-domain limits, reporting when to retry. For a *.domain wildcard, use " +
       "issue_wildcard_cert instead - HTTP-01 can't validate wildcards.",
     inputSchema: {
       domain: z
@@ -633,6 +635,13 @@ registerTool(
       success: z.boolean(),
       certbot_output: z.string().describe("Raw combined stdout/stderr from the certbot CLI invocation, on success or failure"),
       dns_check: z.object(dnsCheckResultShape).optional().describe("Present only when the DNS pre-check failed, before certbot was even invoked"),
+      rate_limit_note: z
+        .string()
+        .optional()
+        .describe(
+          "Set when the local rate-limit guard refused a production request (with when to retry), " +
+            "or when a Let's Encrypt production limit is close"
+        ),
     },
     annotations: { destructiveHint: false, openWorldHint: true },
   },
@@ -650,7 +659,8 @@ registerTool(
       "(DNS-01 validation, required since HTTP-01 can't prove ownership of a wildcard). " +
       "Requires the certbot-dns-route53 plugin installed on the box and AWS credentials in the " +
       "environment (see README) - fails fast with guidance if credentials are missing. Defaults " +
-      "to staging. For a single non-wildcard domain, use issue_cert instead.",
+      "to staging; a local guard refuses production requests that would exceed Let's Encrypt's " +
+      "rate limits, reporting when to retry. For a single non-wildcard domain, use issue_cert instead.",
     inputSchema: {
       domain: z.string().describe("Base domain, e.g. julcap.net - issues it plus *.julcap.net"),
       staging: z
@@ -662,6 +672,13 @@ registerTool(
     outputSchema: {
       success: z.boolean(),
       certbot_output: z.string(),
+      rate_limit_note: z
+        .string()
+        .optional()
+        .describe(
+          "Set when the local rate-limit guard refused a production request (with when to retry), " +
+            "or when a Let's Encrypt production limit is close"
+        ),
     },
     annotations: { destructiveHint: false, openWorldHint: true },
   },
