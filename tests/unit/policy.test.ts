@@ -1,10 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isToolEnabled, loadPolicy, unmatchedPatterns } from "../../src/policy.js";
+import { checkDomainArgs, domainFilter, isDomainAllowed, isToolEnabled, loadPolicy, unmatchedPatterns } from "../../src/policy.js";
+import { readFile } from "node:fs/promises";
 import { startServer, tempDir, textOf, toolNames } from "./helpers.js";
 
 test("loadPolicy defaults to readwrite with no allowlist", () => {
-  assert.deepEqual(loadPolicy({}), { mode: "readwrite", enabledTools: null });
+  assert.deepEqual(loadPolicy({}), { mode: "readwrite", enabledTools: null, allowedDomains: null });
 });
 
 test("loadPolicy rejects bad values instead of silently ignoring them", () => {
@@ -76,4 +77,83 @@ test("server honours MCP_ENABLED_TOOLS", async () => {
 
 test("server refuses to start with an invalid MCP_MODE", async () => {
   await assert.rejects(startServer({ MCP_MODE: "yolo" }));
+});
+
+// --- ALLOWED_DOMAINS ---
+
+test("loadPolicy validates ALLOWED_DOMAINS entries", () => {
+  assert.deepEqual(loadPolicy({ ALLOWED_DOMAINS: " Example.com, *.Lab.Example.com. " }).allowedDomains, [
+    "example.com",
+    "*.lab.example.com",
+  ]);
+  for (const bad of ["*", "*.com", "com", "exa mple.com", "http://example.com", "example.com/x"]) {
+    assert.throws(() => loadPolicy({ ALLOWED_DOMAINS: bad }), /Invalid ALLOWED_DOMAINS/, bad);
+  }
+});
+
+test("isDomainAllowed: exact vs *. patterns", () => {
+  const policy = loadPolicy({ ALLOWED_DOMAINS: "example.com,*.lab.net" });
+  assert.equal(isDomainAllowed(policy, "example.com"), true);
+  assert.equal(isDomainAllowed(policy, "EXAMPLE.com."), true);
+  assert.equal(isDomainAllowed(policy, "www.example.com"), false, "exact entry does not cover subdomains");
+  assert.equal(isDomainAllowed(policy, "a.lab.net"), true);
+  assert.equal(isDomainAllowed(policy, "a.b.lab.net"), true, "wildcard covers any depth");
+  assert.equal(isDomainAllowed(policy, "lab.net"), false, "wildcard does not cover the apex");
+  assert.equal(isDomainAllowed(policy, "evillab.net"), false, "must match on a label boundary");
+  assert.equal(isDomainAllowed(policy, "a.lab.net.evil.com"), false);
+  assert.equal(isDomainAllowed(loadPolicy({}), "anything.io"), true, "no allowlist = allow all");
+  assert.equal(domainFilter(policy)("x.lab.net"), true);
+});
+
+test("checkDomainArgs: unscoped calls, wildcard certs and TXT names", () => {
+  const policy = loadPolicy({ ALLOWED_DOMAINS: "example.com,*.example.com" });
+  assert.equal(checkDomainArgs(policy, "create_site", { domain: "a.example.com" }), null);
+  assert.match(checkDomainArgs(policy, "create_site", { domain: "a.other.com" })!, /not permitted/);
+  assert.equal(checkDomainArgs(policy, "create_txt_record", { domain: "_acme-challenge.a.example.com" }), null);
+  assert.equal(checkDomainArgs(policy, "issue_wildcard_cert", { domain: "example.com" }), null);
+  assert.match(checkDomainArgs(policy, "renew_cert", {})!, /needs an explicit domain/);
+  assert.match(checkDomainArgs(policy, "tail_site_logs", { log_type: "access" })!, /needs an explicit domain/);
+  assert.equal(checkDomainArgs(policy, "list_sites", {}), null, "listings are filtered instead");
+
+  const apexOnly = loadPolicy({ ALLOWED_DOMAINS: "example.com" });
+  assert.match(checkDomainArgs(apexOnly, "issue_wildcard_cert", { domain: "example.com" })!, /\*\.example\.com/);
+  assert.equal(checkDomainArgs(loadPolicy({}), "renew_cert", {}), null);
+});
+
+test("server denies out-of-scope domains, audits the denial, and allows in-scope ones", async () => {
+  const { dir, cleanup } = await tempDir();
+  const file = `${dir}/a.jsonl`;
+  const client = await startServer({ ALLOWED_DOMAINS: "*.example.com", AUDIT_LOG_PATH: file });
+  try {
+    const denied = await client.callTool({ name: "delete_site", arguments: { domain: "victim.other.org", confirm: true } });
+    assert.equal(denied.isError, true);
+    assert.match(textOf(denied), /Denied by policy.*victim\.other\.org/);
+
+    // Read-only tools are subject to the same check.
+    const read = await client.callTool({ name: "get_site_config", arguments: { domain: "victim.other.org" } });
+    assert.match(textOf(read), /Denied by policy/);
+
+    const renew = await client.callTool({ name: "renew_cert", arguments: { dry_run: true } });
+    assert.match(textOf(renew), /needs an explicit domain/);
+
+    // In scope: an unconfirmed delete is a harmless dry run, so it gets through.
+    const ok = await client.callTool({ name: "delete_site", arguments: { domain: "a.example.com", confirm: false } });
+    assert.notEqual(ok.isError, true);
+    assert.match(textOf(ok), /confirm:true/);
+
+    const entries = (await readFile(file, "utf-8")).trim().split("\n").map((l) => JSON.parse(l));
+    assert.deepEqual(entries.map((e) => [e.tool, e.outcome]), [
+      ["delete_site", "denied"],
+      ["get_site_config", "denied"], // denials are logged even for read-only tools
+      ["renew_cert", "denied"],
+      ["delete_site", "failed"],
+    ]);
+  } finally {
+    await client.close();
+    await cleanup();
+  }
+});
+
+test("server refuses to start with an invalid ALLOWED_DOMAINS", async () => {
+  await assert.rejects(startServer({ ALLOWED_DOMAINS: "*.com" }));
 });

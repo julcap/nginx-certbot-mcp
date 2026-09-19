@@ -170,6 +170,36 @@ MCP_ENABLED_TOOLS="check_*,list_sites"  # only these (* is a wildcard)
   reported on stderr at startup (the former is fatal) rather than silently
   exposing the wrong set.
 
+### Domain allowlist
+
+Confine the agent to the domains it's meant to manage, so a confused or
+manipulated agent can't edit, delete, or issue certificates for anything
+else on the box.
+
+```bash
+ALLOWED_DOMAINS="example.com,*.example.com"
+```
+
+- `example.com` matches exactly that name; `*.example.com` matches any
+  subdomain at any depth, **not** the apex — list both if you want both.
+  A bare TLD (`*.com`) is rejected at startup.
+- Applies to every tool's `domain` argument, read-only tools included, and
+  to Route 53 record names (`_acme-challenge.a.example.com` matches
+  `*.example.com`).
+- `issue_wildcard_cert` for `example.com` also covers `*.example.com`, so
+  both must be allowed.
+- Listings (`list_sites`, `check_cert_expiry`, `list_archived_sites`) only
+  show in-scope domains, and `prune_archives` only touches in-scope
+  archives.
+- `renew_cert` and `tail_site_logs` normally act on everything when
+  `domain` is omitted; with an allowlist they require one.
+- Refused calls return a `Denied by policy` error and are written to the
+  audit log with outcome `denied`.
+
+This limits which *domains* the tools act on; it doesn't change what the
+`sudo` rules permit the server user to do — see
+[Required permissions](#required-permissions).
+
 ## Environment variables
 
 | Variable | Used by | Notes |
@@ -180,6 +210,7 @@ MCP_ENABLED_TOOLS="check_*,list_sites"  # only these (* is a wildcard)
 | `AUDIT_LOG_PATH` | All mutating tools | Optional — audit log file; default `~/.nginx-certbot-mcp/audit.jsonl`, `off` disables. See [Audit log](#audit-log) |
 | `MCP_MODE` | All tools | Optional — `readwrite` (default) or `readonly`. See [Read-only mode](#read-only-mode-and-tool-allowlist) |
 | `MCP_ENABLED_TOOLS` | All tools | Optional — comma-separated tool names / `*` patterns to expose; default all |
+| `ALLOWED_DOMAINS` | All tools taking a `domain` | Optional — comma-separated `example.com` / `*.example.com` entries the agent may act on; default any. See [Domain allowlist](#domain-allowlist) |
 | `AUDIT_LOG_READS` | Read-only tools | Optional — `true` also audits read-only calls |
 
 ## Testing

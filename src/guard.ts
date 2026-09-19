@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { AuditLogger, redactArgs, truncate, type AuditOutcome } from "./audit.js";
-import { isToolEnabled, unmatchedPatterns, type Policy } from "./policy.js";
+import { checkDomainArgs, isToolEnabled, unmatchedPatterns, type Policy } from "./policy.js";
 
 // Every tool is registered through this instead of server.registerTool
 // directly, so cross-cutting behaviour (auditing, and policy checks) lives in
@@ -76,6 +76,12 @@ export function createRegistrar(server: McpServer, options: GuardOptions): Regis
           duration_ms: Date.now() - started,
         });
       };
+
+      const violation = checkDomainArgs(policy, name, args);
+      if (violation) {
+        await record("denied", violation);
+        return { isError: true, content: [{ type: "text", text: `Denied by policy: ${violation}` }] };
+      }
 
       let result: any;
       try {

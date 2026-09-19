@@ -29,7 +29,7 @@ import { deleteCert } from "./tools/deleteCert.js";
 import { MAX_LOG_LINES } from "./config.js";
 import { AuditLogger, resolveAuditPath } from "./audit.js";
 import { createRegistrar } from "./guard.js";
-import { loadPolicy } from "./policy.js";
+import { domainFilter, loadPolicy } from "./policy.js";
 
 const server = new McpServer({
   name: "nginx-certbot-mcp",
@@ -94,7 +94,8 @@ registerTool(
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
   async () => {
-    const sites = await listSites();
+    const inScope = domainFilter(policy);
+    const sites = (await listSites()).filter((s) => s.domain.split(/\s+/).every(inScope));
     return {
       content: [{ type: "text", text: JSON.stringify(sites, null, 2) }],
       structuredContent: { sites },
@@ -144,7 +145,7 @@ registerTool(
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
   async () => {
-    const certs = await checkCertExpiry();
+    const certs = (await checkCertExpiry()).filter((c) => domainFilter(policy)(c.domain));
     return {
       content: [{ type: "text", text: JSON.stringify(certs, null, 2) }],
       structuredContent: { certificates: certs },
@@ -260,7 +261,7 @@ registerTool(
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
   async ({ domain }) => {
-    const result = await listArchivedSites(domain);
+    const result = (await listArchivedSites(domain)).filter((a) => domainFilter(policy)(a.domain));
     return {
       content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
       structuredContent: { archives: result },
@@ -489,7 +490,7 @@ registerTool(
     annotations: { destructiveHint: true, idempotentHint: true, openWorldHint: false },
   },
   async ({ older_than_days, confirm }) => {
-    const result = await pruneArchives({ older_than_days, confirm });
+    const result = await pruneArchives({ older_than_days, confirm, isAllowed: domainFilter(policy) });
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], structuredContent: result as unknown as Record<string, unknown> };
   }
 );
