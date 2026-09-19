@@ -122,6 +122,35 @@ Either way, DNS still has to point at your public IP (`create_domain_record`
 handles that) — DNS and port-forwarding are two separate requirements, and
 `issue_cert` needs both.
 
+## Safety controls
+
+Beyond the per-tool `confirm` gates and staging-by-default, the server has
+operator-level controls that an agent can't turn off from inside a
+conversation. Everything is configured through environment variables (see
+[Environment variables](#environment-variables)).
+
+### Audit log
+
+Every mutating tool call is appended to a JSONL file — timestamp, tool,
+arguments, MCP client, whether it was a dry run, outcome, and a one-line
+result — including calls that were refused. Credentials in arguments are
+redacted and long values truncated.
+
+```json
+{"ts":"2026-09-19T10:02:11.402Z","tool":"delete_site","mutating":true,"client":"claude-code/2.1.0","args":{"domain":"old.example.com","confirm":true},"dry_run":false,"outcome":"ok","message":"Removed \"old.example.com\" (disabled, archived ...","duration_ms":212}
+```
+
+`outcome` is `ok`, `failed` (the tool ran and reported `success:false`,
+including an unconfirmed dry run), `error` (it threw), or `denied`.
+
+- Default path is `~/.nginx-certbot-mcp/audit.jsonl` (mode `0600`); override
+  with `AUDIT_LOG_PATH`, or set `AUDIT_LOG_PATH=off` to disable.
+- The server refuses to start if the log isn't writable — you find out at
+  startup, not after the first change.
+- Read-only calls are skipped by default; set `AUDIT_LOG_READS=true` to
+  include them.
+- The file grows forever; point `logrotate` at it if that matters.
+
 ## Environment variables
 
 | Variable | Used by | Notes |
@@ -129,6 +158,8 @@ handles that) — DNS and port-forwarding are two separate requirements, and
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | `create_domain_record`, `delete_domain_record`, `create_txt_record`, `issue_wildcard_cert` | Credentials for a Route-53-scoped IAM user — no other AWS permissions needed |
 | `ROUTE53_HOSTED_ZONE_ID` | `create_domain_record`, `delete_domain_record`, `create_txt_record` | Find with `aws route53 list-hosted-zones-by-name --dns-name julcap.net` |
 | `AWS_DEFAULT_REGION` | Same as above, plus `issue_wildcard_cert` | Optional — Route 53 is global, but the AWS SDK/boto3 still need a signing region; defaults to `us-east-1` |
+| `AUDIT_LOG_PATH` | All mutating tools | Optional — audit log file; default `~/.nginx-certbot-mcp/audit.jsonl`, `off` disables. See [Audit log](#audit-log) |
+| `AUDIT_LOG_READS` | Read-only tools | Optional — `true` also audits read-only calls |
 
 ## Testing
 

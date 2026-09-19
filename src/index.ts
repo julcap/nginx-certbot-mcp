@@ -27,10 +27,29 @@ import { renewCert } from "./tools/renewCert.js";
 import { revokeCert } from "./tools/revokeCert.js";
 import { deleteCert } from "./tools/deleteCert.js";
 import { MAX_LOG_LINES } from "./config.js";
+import { AuditLogger, resolveAuditPath } from "./audit.js";
+import { createRegistrar } from "./guard.js";
 
 const server = new McpServer({
   name: "nginx-certbot-mcp",
   version: "0.1.0",
+});
+
+const audit = new AuditLogger(resolveAuditPath(), process.env.AUDIT_LOG_READS === "true");
+try {
+  await audit.init();
+} catch (err: any) {
+  console.error(err.message);
+  process.exit(1);
+}
+
+// All tools register through this so auditing (and policy) apply uniformly.
+const registerTool = createRegistrar(server, {
+  audit,
+  getClient: () => {
+    const client = server.server.getClientVersion();
+    return client ? `${client.name}/${client.version}` : undefined;
+  },
 });
 
 // Shared fragments so the DNS-check result shape isn't repeated across every
@@ -50,7 +69,7 @@ const route53ChangeResultShape = {
 
 // --- Read-only tools ---
 
-server.registerTool(
+registerTool(
   "list_sites",
   {
     description:
@@ -79,7 +98,7 @@ server.registerTool(
   }
 );
 
-server.registerTool(
+registerTool(
   "get_site_config",
   {
     description:
@@ -100,7 +119,7 @@ server.registerTool(
   }
 );
 
-server.registerTool(
+registerTool(
   "check_cert_expiry",
   {
     description:
@@ -129,7 +148,7 @@ server.registerTool(
   }
 );
 
-server.registerTool(
+registerTool(
   "check_dns",
   {
     description:
@@ -150,7 +169,7 @@ server.registerTool(
   }
 );
 
-server.registerTool(
+registerTool(
   "check_upstream_health",
   {
     description:
@@ -174,7 +193,7 @@ server.registerTool(
   }
 );
 
-server.registerTool(
+registerTool(
   "get_nginx_status",
   {
     description: "Report whether the nginx service is active (via systemctl) and its version string. Read-only.",
@@ -191,7 +210,7 @@ server.registerTool(
   }
 );
 
-server.registerTool(
+registerTool(
   "tail_site_logs",
   {
     description:
@@ -218,7 +237,7 @@ server.registerTool(
   }
 );
 
-server.registerTool(
+registerTool(
   "list_archived_sites",
   {
     description:
@@ -247,7 +266,7 @@ server.registerTool(
 
 // --- DNS (Route 53) ---
 
-server.registerTool(
+registerTool(
   "create_domain_record",
   {
     description:
@@ -270,7 +289,7 @@ server.registerTool(
   }
 );
 
-server.registerTool(
+registerTool(
   "delete_domain_record",
   {
     description:
@@ -290,7 +309,7 @@ server.registerTool(
   }
 );
 
-server.registerTool(
+registerTool(
   "create_txt_record",
   {
     description:
@@ -313,7 +332,7 @@ server.registerTool(
   }
 );
 
-server.registerTool(
+registerTool(
   "delete_txt_record",
   {
     description:
@@ -337,7 +356,7 @@ server.registerTool(
 
 // --- Site lifecycle ---
 
-server.registerTool(
+registerTool(
   "create_site",
   {
     description:
@@ -365,7 +384,7 @@ server.registerTool(
   }
 );
 
-server.registerTool(
+registerTool(
   "update_site",
   {
     description:
@@ -393,7 +412,7 @@ server.registerTool(
   }
 );
 
-server.registerTool(
+registerTool(
   "delete_site",
   {
     description:
@@ -418,7 +437,7 @@ server.registerTool(
   }
 );
 
-server.registerTool(
+registerTool(
   "restore_site",
   {
     description:
@@ -447,7 +466,7 @@ server.registerTool(
   }
 );
 
-server.registerTool(
+registerTool(
   "prune_archives",
   {
     description:
@@ -473,7 +492,7 @@ server.registerTool(
 
 // --- Nginx ---
 
-server.registerTool(
+registerTool(
   "reload_nginx",
   {
     description:
@@ -495,7 +514,7 @@ server.registerTool(
 
 // --- Certificate lifecycle ---
 
-server.registerTool(
+registerTool(
   "issue_cert",
   {
     description:
@@ -549,7 +568,7 @@ server.registerTool(
   }
 );
 
-server.registerTool(
+registerTool(
   "issue_wildcard_cert",
   {
     description:
@@ -578,7 +597,7 @@ server.registerTool(
   }
 );
 
-server.registerTool(
+registerTool(
   "renew_cert",
   {
     description:
@@ -602,7 +621,7 @@ server.registerTool(
   }
 );
 
-server.registerTool(
+registerTool(
   "revoke_cert",
   {
     description:
@@ -626,7 +645,7 @@ server.registerTool(
   }
 );
 
-server.registerTool(
+registerTool(
   "delete_cert",
   {
     description:
