@@ -37,6 +37,7 @@ const ENV_TEST_EXAMPLE = ".env.test.example";
 
 // Canonical order for the final report - matches src/index.ts registration.
 const ALL_TOOLS = [
+  "list_operations", "get_operation",
   "list_sites", "get_site_config", "check_cert_expiry", "check_dns",
   "check_upstream_health", "get_nginx_status", "diagnose_site", "tail_site_logs", "list_archived_sites", "list_site_backups",
   "create_domain_record", "delete_domain_record", "create_txt_record", "delete_txt_record",
@@ -438,6 +439,22 @@ async function main() {
           }
         }
       }
+      const history = await step(
+        client,
+        "list_operations",
+        { tool: "update_site", page_size: 5 },
+        (p) => (Array.isArray(p?.operations) && p.operations.length >= 1) || "no update_site operation was recorded"
+      );
+      if (history.pass) {
+        await step(
+          client,
+          "get_operation",
+          { id: history.parsed.operations[0].id },
+          (p) => p?.operation?.id === history.parsed.operations[0].id
+        );
+      } else {
+        report("get_operation", "skip", "blocked by list_operations failure");
+      }
       await step(client, "reload_nginx", {}, (p) => p?.success === true);
       await step(client, "tail_site_logs", { log_type: "access", lines: 5 }, (p) => p?.success === true);
       const deleted = await step(client, "delete_site", { domain: testSub, confirm: true }, (p) => p?.success === true);
@@ -452,7 +469,7 @@ async function main() {
         report("prune_archives", "skip", "blocked by delete_site failure");
       }
     } else {
-      for (const t of ["get_site_config", "diagnose_site", "update_site", "list_site_backups", "rollback_site", "reload_nginx", "tail_site_logs", "delete_site", "restore_site", "prune_archives"]) {
+      for (const t of ["get_site_config", "diagnose_site", "update_site", "list_operations", "get_operation", "list_site_backups", "rollback_site", "reload_nginx", "tail_site_logs", "delete_site", "restore_site", "prune_archives"]) {
         report(t, "skip", "blocked by create_site failure");
       }
     }

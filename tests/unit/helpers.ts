@@ -10,7 +10,7 @@ export async function tempDir(): Promise<{ dir: string; cleanup: () => Promise<v
 }
 
 // Starts the real server over stdio, exactly as an MCP client would, with the
-// given environment layered over a clean one (no inherited AUDIT_/MCP_ vars).
+// given environment layered over a clean one (no inherited audit/policy vars).
 export async function startServer(env: Record<string, string>): Promise<Client> {
   const clean: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) {

@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { AuditLogger, redactArgs, truncate, type AuditOutcome } from "./audit.js";
+import { classifyUpdateSiteResult, type FinishOperationInput, type OperationHistory } from "./operations.js";
 import { checkDomainArgs, isToolEnabled, unmatchedPatterns, type Policy } from "./policy.js";
 
 // Every tool is registered through this instead of server.registerTool
@@ -8,6 +9,7 @@ import { checkDomainArgs, isToolEnabled, unmatchedPatterns, type Policy } from "
 
 export interface GuardOptions {
   audit: AuditLogger;
+  history?: OperationHistory;
   policy: Policy;
   getClient?: () => string | undefined;
 }
@@ -41,7 +43,7 @@ export interface Registrar {
 }
 
 export function createRegistrar(server: McpServer, options: GuardOptions): Registrar {
-  const { audit, policy, getClient } = options;
+  const { audit, history, policy, getClient } = options;
   const register = server.registerTool.bind(server) as (...args: any[]) => unknown;
   const registered: string[] = [];
   const skipped: string[] = [];
@@ -61,6 +63,30 @@ export function createRegistrar(server: McpServer, options: GuardOptions): Regis
     const wrapped = async (...cbArgs: any[]) => {
       const args = hasInput ? cbArgs[0] : {};
       const started = Date.now();
+      const client = getClient?.();
+      let operation: ReturnType<OperationHistory["start"]> | undefined;
+      if (history && name === "update_site") {
+        try {
+          operation = history.start({
+            tool: name,
+            mutating,
+            ...(typeof args?.domain === "string" ? { target: args.domain } : {}),
+            args: redactArgs(args),
+            ...(client ? { client: { displayName: client } } : {}),
+          });
+        } catch (err: any) {
+          console.error(`[operations] failed to start ${name}: ${err?.message ?? err}`);
+        }
+      }
+
+      const finishOperation = (update: FinishOperationInput) => {
+        if (!operation || !history) return;
+        try {
+          history.finish(operation.id, update);
+        } catch (err: any) {
+          console.error(`[operations] failed to finish ${operation.id}: ${err?.message ?? err}`);
+        }
+      };
 
       const record = (outcome: AuditOutcome, message?: string) => {
         if (!mutating && !audit.logReads && outcome !== "denied") return Promise.resolve();
@@ -68,17 +94,25 @@ export function createRegistrar(server: McpServer, options: GuardOptions): Regis
           ts: new Date(started).toISOString(),
           tool: name,
           mutating,
-          client: getClient?.(),
+          client,
           args: redactArgs(args),
           ...dryRunField(args),
           outcome,
           message,
+          ...(operation ? { operation_id: operation.id } : {}),
           duration_ms: Date.now() - started,
         });
       };
 
       const violation = checkDomainArgs(policy, name, args);
       if (violation) {
+        finishOperation({
+          executionStatus: "denied",
+          verificationStatus: "not_requested",
+          steps: [{ name: "policy_check", status: "failed", summary: "Denied before workflow execution." }],
+          errors: [{ code: "POLICY_DENIED", message: violation }],
+          rollback: { status: "not_needed" },
+        });
         await record("denied", violation);
         return { isError: true, content: [{ type: "text", text: `Denied by policy: ${violation}` }] };
       }
@@ -87,9 +121,19 @@ export function createRegistrar(server: McpServer, options: GuardOptions): Regis
       try {
         result = await handler(...cbArgs);
       } catch (err: any) {
-        await record("error", truncate(err?.message ?? String(err)));
+        const message = truncate(err?.message ?? String(err));
+        finishOperation({
+          executionStatus: "failed",
+          verificationStatus: "unavailable",
+          steps: [{ name: "update_site", status: "failed" }],
+          evidence: [{ kind: "live_service", status: "unavailable", summary: "Workflow threw before verification completed." }],
+          errors: [{ code: "WORKFLOW_ERROR", message }],
+          rollback: { status: "unknown", summary: "The workflow threw before rollback outcome could be classified." },
+        });
+        await record("error", message);
         throw err;
       }
+      if (operation) finishOperation(classifyUpdateSiteResult(result?.structuredContent ?? {}));
       const { outcome, message } = summarize(result);
       await record(outcome, message);
       return result;

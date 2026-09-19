@@ -32,6 +32,14 @@ import { deleteCert } from "./tools/deleteCert.js";
 import { MAX_LOG_LINES } from "./config.js";
 import { AuditLogger, resolveAuditPath } from "./audit.js";
 import { createRegistrar } from "./guard.js";
+import {
+  InMemoryOperationHistory,
+  MAX_OPERATION_CURSOR_LENGTH,
+  MAX_OPERATION_STRING_LENGTH,
+  operationVisible,
+  type ExecutionStatus,
+  type VerificationStatus,
+} from "./operations.js";
 import { domainFilter, loadPolicy } from "./policy.js";
 
 const server = new McpServer({
@@ -40,6 +48,7 @@ const server = new McpServer({
 });
 
 const audit = new AuditLogger(resolveAuditPath(), process.env.AUDIT_LOG_READS === "true");
+const history = new InMemoryOperationHistory();
 let policy;
 try {
   policy = loadPolicy();
@@ -48,10 +57,10 @@ try {
   console.error(err.message);
   process.exit(1);
 }
-
 // All tools register through this so auditing (and policy) apply uniformly.
 const { registerTool, summary } = createRegistrar(server, {
   audit,
+  history,
   policy,
   getClient: () => {
     const client = server.server.getClientVersion();
@@ -75,6 +84,107 @@ const route53ChangeResultShape = {
 };
 
 // --- Read-only tools ---
+
+const operationString = () => z.string().max(MAX_OPERATION_STRING_LENGTH);
+const operationTimestamp = () => z.string().max(24);
+const operationStepSchema = z.object({
+  name: operationString(),
+  status: z.enum(["pending", "succeeded", "failed", "skipped", "unavailable"]),
+  summary: operationString().optional(),
+});
+const operationEvidenceSchema = z.object({
+  kind: operationString(),
+  status: z.enum(["passed", "failed", "pending", "unavailable"]),
+  summary: operationString(),
+});
+const operationRecordSchema = z.object({
+  schemaVersion: z.literal(1),
+  id: z.string().max(36).uuid(),
+  tool: operationString(),
+  mutating: z.boolean(),
+  target: operationString().optional(),
+  args: z.record(z.string().max(MAX_OPERATION_STRING_LENGTH), z.unknown()),
+  client: z.object({ displayName: operationString().optional(), identityTrusted: z.literal(false) }).optional(),
+  startedAt: operationTimestamp(),
+  finishedAt: operationTimestamp().optional(),
+  executionStatus: z.enum(["running", "succeeded", "failed", "denied", "interrupted"]),
+  verificationStatus: z.enum(["not_requested", "pending", "passed", "failed", "unavailable"]),
+  steps: z.array(operationStepSchema).max(20),
+  evidence: z.array(operationEvidenceSchema).max(20),
+  errors: z.array(z.object({ code: operationString().optional(), message: operationString() })).max(20),
+  rollback: z.object({
+    status: z.enum(["not_needed", "succeeded", "failed", "unknown"]),
+    summary: operationString().optional(),
+  }).optional(),
+});
+
+registerTool(
+  "list_operations",
+  {
+    description:
+      "List bounded operation records from this server process, newest first. Results are redacted and filtered " +
+      "through this server's tool and domain policy. Execution status is separate from verification " +
+      "status; pending/unavailable verification never implies live readiness. Records are not durable across restarts.",
+    inputSchema: {
+      page_size: z.number().int().min(1).max(100).default(20),
+      cursor: z.string().max(MAX_OPERATION_CURSOR_LENGTH).optional().describe("Opaque cursor returned by the previous page"),
+      tool: z.string().max(MAX_OPERATION_STRING_LENGTH).optional().describe("Exact tool-name filter"),
+      execution_status: z.enum(["running", "succeeded", "failed", "denied", "interrupted"]).optional(),
+      verification_status: z.enum(["not_requested", "pending", "passed", "failed", "unavailable"]).optional(),
+    },
+    outputSchema: {
+      operations: z.array(operationRecordSchema).max(100),
+      next_cursor: z.string().max(MAX_OPERATION_CURSOR_LENGTH).optional(),
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  async ({ page_size, cursor, tool, execution_status, verification_status }) => {
+    const page = history.list(
+      {
+        pageSize: page_size,
+        cursor,
+        tool,
+        executionStatus: execution_status as ExecutionStatus | undefined,
+        verificationStatus: verification_status as VerificationStatus | undefined,
+      },
+      (record) => operationVisible(policy, record)
+    );
+    const payload = {
+      operations: page.operations,
+      ...(page.nextCursor ? { next_cursor: page.nextCursor } : {}),
+    };
+    return {
+      content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+      structuredContent: payload as unknown as Record<string, unknown>,
+    };
+  }
+);
+
+registerTool(
+  "get_operation",
+  {
+    description:
+      "Get one current-process operation record by opaque ID. Returns not found for records outside this " +
+      "server's current tool/domain policy so history cannot reveal out-of-scope targets. Records are not durable across restarts.",
+    inputSchema: { id: z.string().max(36).uuid().describe("Opaque operation ID returned by list_operations") },
+    outputSchema: { operation: operationRecordSchema },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  async ({ id }) => {
+    const operation = history.get(id, (record) => operationVisible(policy, record));
+    if (!operation) {
+      return {
+        isError: true,
+        content: [{ type: "text", text: "Operation not found or not visible under the current policy." }],
+      };
+    }
+    const payload = { operation };
+    return {
+      content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+      structuredContent: payload as unknown as Record<string, unknown>,
+    };
+  }
+);
 
 registerTool(
   "list_sites",

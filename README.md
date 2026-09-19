@@ -16,11 +16,13 @@ script](#why-a-wrapper-script-instead-of-sudo-on-teelnrm) below).
 
 ## Tools
 
-All 26 are implemented and exercised against real infrastructure — see
+All 28 are implemented; the infrastructure tools are exercised against real infrastructure — see
 [Testing](#testing).
 
 | Tool | Description |
 |---|---|
+| `list_operations` | List bounded, redacted operation records from the current server process |
+| `get_operation` | Get one current-process operation record by opaque ID |
 | `list_sites` | List configured nginx server blocks with domain, upstream, and SSL status |
 | `get_site_config` | Raw nginx config for one domain |
 | `check_cert_expiry` | List certbot-managed certs and days until expiry |
@@ -153,7 +155,40 @@ including an unconfirmed dry run), `error` (it threw), or `denied`.
   startup, not after the first change.
 - Read-only calls are skipped by default; set `AUDIT_LOG_READS=true` to
   include them.
+- Instrumented workflows include `operation_id` so an audit entry can be
+  correlated with its structured current-process operation record.
 - The file grows forever; point `logrotate` at it if that matters.
+
+### Operation records
+
+`update_site` records a versioned, structured lifecycle in a bounded
+current-process buffer in addition to the existing durable audit line. Use the
+read-only `list_operations` and `get_operation` tools to inspect records from
+the currently running server process. Results are redacted, cursor-paginated,
+and filtered by the current tool and domain policy; inaccessible IDs look the
+same as missing IDs.
+
+Execution and verification are separate. A successful `update_site` records
+`executionStatus=succeeded` but `verificationStatus=pending`: its local
+`nginx -t` passed, but the tool deliberately did not reload nginx or test
+public reachability. A record still at `running` is not success.
+
+The buffer holds at most 1,000 records, does not evict running records, and is
+empty after each server restart. It is not shared by multiple server processes
+and is not a substitute for durable operation history. If running records fill
+the buffer, new observation records are skipped without suppressing policy,
+audit, or the underlying workflow result.
+
+Durable persistence is intentionally paused. Node 20 cannot use the newer
+built-in SQLite API, and adding a maintained external SQLite driver requires an
+explicit dependency/compatibility decision. This increment does not substitute
+a custom JSON-file or locking protocol. The existing JSONL audit log remains the
+durable trail currently available.
+
+See [`docs/observability-plan.md`](docs/observability-plan.md) for the paused
+storage decision, status model, and later optional-console phases. Operation
+recording does not coordinate or prevent concurrent nginx, DNS, certbot, or
+other tool work.
 
 ### Read-only mode and tool allowlist
 
@@ -267,6 +302,7 @@ counted or refused.
 | `RATE_LIMIT_GUARD` | `issue_cert`, `issue_wildcard_cert` | Optional — `off` disables the [production issuance guard](#production-issuance-guard) |
 | `MCP_STATE_DIR` | `issue_cert`, `issue_wildcard_cert` | Optional — where the guard keeps its issuance history; default `~/.nginx-certbot-mcp` |
 | `AUDIT_LOG_READS` | Read-only tools | Optional — `true` also audits read-only calls |
+
 
 ## Testing
 

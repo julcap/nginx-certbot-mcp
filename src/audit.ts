@@ -20,6 +20,7 @@ export interface AuditEntry {
   dry_run?: boolean;
   outcome: AuditOutcome;
   message?: string;
+  operation_id?: string;
   duration_ms: number;
 }
 
