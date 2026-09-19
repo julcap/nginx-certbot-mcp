@@ -433,3 +433,21 @@ However, you may not provide a substantial portion of its functionality
 to third parties as a hosted or managed service.
 
 For commercial licensing or partnership enquiries, contact the maintainer.
+
+## TODO
+
+Planned, not yet implemented:
+
+- [ ] **`provision_site` workflow tool** — DNS record, nginx site, reload and
+  certificate in one call, rolling back the steps already taken if a later
+  one fails. Today the agent has to sequence the
+  [add-a-site flow](#typical-add-a-new-site-flow) itself.
+- [ ] **Certificate expiry alerts** — a `warn_days` threshold on
+  `check_cert_expiry` and an optional webhook (Slack / Discord) for
+  certificates that are close to expiring.
+- [ ] **Per-site options in `create_site`** — custom headers, client body
+  size, rate limiting, basic auth, IP allowlist, HTTP→HTTPS redirect, HSTS,
+  and a choice of named templates instead of the single default one.
+- [ ] **More DNS providers** — Cloudflare first, alongside Route 53 (certbot
+  already has DNS plugins for it), so the DNS and DNS-01 tools aren't tied to
+  AWS.
