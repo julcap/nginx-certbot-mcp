@@ -16,7 +16,7 @@ script](#why-a-wrapper-script-instead-of-sudo-on-teelnrm) below).
 
 ## Tools
 
-All 23 are implemented and exercised against real infrastructure — see
+All 26 are implemented and exercised against real infrastructure — see
 [Testing](#testing).
 
 | Tool | Description |
@@ -27,8 +27,10 @@ All 23 are implemented and exercised against real infrastructure — see
 | `check_dns` | Resolve a domain (CNAME, then A/AAAA) against public resolvers |
 | `check_upstream_health` | TCP probe of an upstream `host:port` |
 | `get_nginx_status` | Whether nginx is running, plus its version |
+| `diagnose_site` | One-call health report for a domain: config, nginx, DNS, upstream, certificate, recent errors — with suggested next tools |
 | `tail_site_logs` | Tail access/error logs, capped at 1000 lines |
 | `list_archived_sites` | List configs archived by `delete_site` |
+| `list_site_backups` | List the automatic pre-change backups of site configs |
 | `create_domain_record` | Upsert a Route 53 CNAME |
 | `delete_domain_record` | Delete a Route 53 CNAME — `confirm:true` |
 | `create_txt_record` | Upsert a Route 53 TXT record, e.g. for ACME DNS-01 |
@@ -37,6 +39,7 @@ All 23 are implemented and exercised against real infrastructure — see
 | `update_site` | Rewrite an existing site's `proxy_pass` upstream in place |
 | `delete_site` | Disable, archive, and delete a server block — `confirm:true` |
 | `restore_site` | Re-enable a site from its newest (or a chosen) archive — `confirm:true` |
+| `rollback_site` | Undo a config change by restoring the newest (or a chosen) backup — `confirm:true` |
 | `prune_archives` | Delete archives older than N days — `confirm:true` |
 | `reload_nginx` | `nginx -t`, then reload only if it passes |
 | `issue_cert` | Issue via HTTP-01 (`certbot --nginx`) — defaults to LE staging |
@@ -64,12 +67,13 @@ update that adds a new allowed command.
 `npm run setup -- <user>` installs two things:
 
 1. **`/usr/local/bin/nginx-mcp-writesite`** — a narrow wrapper script that
-   only accepts `{write|enable|disable|remove|archive|restore|remove-archive}
+   only accepts `{write|enable|disable|remove|archive|restore|remove-archive|backup|restore-backup}
    <domain>` or `log {access|error} <lines>`, and only ever touches paths
    under `/etc/nginx/sites-available/`, `/etc/nginx/sites-enabled/`,
-   `/etc/nginx/sites-archived/`, and the two fixed nginx log files. It
-   re-validates the domain (and, for `restore`/`remove-archive`, the
-   archive filename) itself, independent of the Node-side validation.
+   `/etc/nginx/sites-archived/`, `/etc/nginx/sites-backups/`, and the two
+   fixed nginx log files. It re-validates the domain (and, for
+   `restore`/`remove-archive`/`restore-backup`, the archive or backup
+   filename) itself, independent of the Node-side validation.
 2. **`/etc/sudoers.d/nginx-mcp`** — grants `<user>` passwordless sudo on
    exactly `nginx -t`, `systemctl reload nginx`, `systemctl is-active
    --quiet nginx`, `certbot`, and the wrapper above. Nothing broader. It
@@ -122,6 +126,133 @@ Either way, DNS still has to point at your public IP (`create_domain_record`
 handles that) — DNS and port-forwarding are two separate requirements, and
 `issue_cert` needs both.
 
+## Safety controls
+
+Beyond the per-tool `confirm` gates and staging-by-default, the server has
+operator-level controls that an agent can't turn off from inside a
+conversation. Everything is configured through environment variables (see
+[Environment variables](#environment-variables)).
+
+### Audit log
+
+Every mutating tool call is appended to a JSONL file — timestamp, tool,
+arguments, MCP client, whether it was a dry run, outcome, and a one-line
+result — including calls that were refused. Credentials in arguments are
+redacted and long values truncated.
+
+```json
+{"ts":"2026-09-19T10:02:11.402Z","tool":"delete_site","mutating":true,"client":"claude-code/2.1.0","args":{"domain":"old.example.com","confirm":true},"dry_run":false,"outcome":"ok","message":"Removed \"old.example.com\" (disabled, archived ...","duration_ms":212}
+```
+
+`outcome` is `ok`, `failed` (the tool ran and reported `success:false`,
+including an unconfirmed dry run), `error` (it threw), or `denied`.
+
+- Default path is `~/.nginx-certbot-mcp/audit.jsonl` (mode `0600`); override
+  with `AUDIT_LOG_PATH`, or set `AUDIT_LOG_PATH=off` to disable.
+- The server refuses to start if the log isn't writable — you find out at
+  startup, not after the first change.
+- Read-only calls are skipped by default; set `AUDIT_LOG_READS=true` to
+  include them.
+- The file grows forever; point `logrotate` at it if that matters.
+
+### Read-only mode and tool allowlist
+
+Hand an agent visibility without write access, or expose only the tools a
+workflow needs. Tools that are switched off are never registered, so the
+agent can't see or call them.
+
+```bash
+MCP_MODE=readonly                       # only tools annotated read-only
+MCP_ENABLED_TOOLS="check_*,list_sites"  # only these (* is a wildcard)
+```
+
+- `MCP_MODE` is `readwrite` (default) or `readonly`. Read-only mode drops
+  every tool that changes state — DNS, nginx config, certificates, reloads.
+- `MCP_ENABLED_TOOLS` is a comma-separated list of tool names or `*`
+  patterns. When both are set, a tool must pass both.
+- An invalid `MCP_MODE`, or an allowlist entry that matches no tool, is
+  reported on stderr at startup (the former is fatal) rather than silently
+  exposing the wrong set.
+
+### Domain allowlist
+
+Confine the agent to the domains it's meant to manage, so a confused or
+manipulated agent can't edit, delete, or issue certificates for anything
+else on the box.
+
+```bash
+ALLOWED_DOMAINS="example.com,*.example.com"
+```
+
+- `example.com` matches exactly that name; `*.example.com` matches any
+  subdomain at any depth, **not** the apex — list both if you want both.
+  A bare TLD (`*.com`) is rejected at startup.
+- Applies to every tool's `domain` argument, read-only tools included, and
+  to Route 53 record names (`_acme-challenge.a.example.com` matches
+  `*.example.com`).
+- `issue_wildcard_cert` for `example.com` also covers `*.example.com`, so
+  both must be allowed.
+- Listings (`list_sites`, `check_cert_expiry`, `list_archived_sites`) only
+  show in-scope domains, and `prune_archives` only touches in-scope
+  archives.
+- `renew_cert` and `tail_site_logs` normally act on everything when
+  `domain` is omitted; with an allowlist they require one.
+- Refused calls return a `Denied by policy` error and are written to the
+  audit log with outcome `denied`.
+
+This limits which *domains* the tools act on; it doesn't change what the
+`sudo` rules permit the server user to do — see
+[Required permissions](#required-permissions).
+
+### Config backups and rollback
+
+`create_site`, `update_site`, `restore_site` and `rollback_site` snapshot
+a site's existing config before changing it, and each one restores that
+snapshot itself if the new config fails `nginx -t` — so a broken change
+never stays on disk. Backups also cover the case `nginx -t` can't catch: a
+config that is *valid* but wrong (the wrong upstream, say).
+
+- `list_site_backups` shows the snapshots, newest first; `rollback_site`
+  restores the newest one by default (the config as it was before the last
+  change) or a chosen `backup_filename`. It needs `confirm:true`.
+- Rolling back snapshots the current config first, so calling it again
+  flips back — a rollback is never a one-way door.
+- The newest 10 backups per domain are kept in
+  `/etc/nginx/sites-backups/`; older ones are deleted automatically.
+- If a snapshot can't be taken, the change is refused rather than made
+  without a safety net. After upgrading, re-run `npm run setup -- <user>`
+  so the installed helper knows the `backup` action.
+- Backups are separate from `delete_site`'s archives: those are "this site
+  was deleted", backups are "what it looked like before the last change".
+- `reload_nginx` still only reloads a config that passes `nginx -t`; when
+  it refuses, its `hint` points at `rollback_site`.
+
+### Production issuance guard
+
+Let's Encrypt's production rate limits punish retry loops, and a lockout can
+last a week. `issue_cert` and `issue_wildcard_cert` keep a local history of
+production (`staging:false`) attempts and refuse a request that would
+exceed a limit — before spending it:
+
+| Limit | Guard refuses when |
+|---|---|
+| Duplicate certificates | 5 certs for the exact same set of names in 7 days |
+| Failed validations | 5 failed validations for a name in 1 hour |
+| Certificates per registered domain | 50 certs for one registered domain in 7 days |
+
+A refusal says which limit was hit and when to retry; a `Heads-up` note in
+`rate_limit_note` appears as a limit gets close. Staging requests are never
+counted or refused.
+
+- It counts only what was issued through this server, so it's a guard rail,
+  not a substitute for Let's Encrypt's own limits. "Registered domain" is
+  approximated from the last two labels (three under `co.uk`-style suffixes).
+- Only failures that reached validation count towards the failed-validation
+  limit; a missing sudo rule or a missing nginx block doesn't.
+- History lives in `issuance.json` under `MCP_STATE_DIR` (default
+  `~/.nginx-certbot-mcp/`, mode `0600`) and is pruned after 7 days. Set
+  `RATE_LIMIT_GUARD=off` to disable the guard.
+
 ## Environment variables
 
 | Variable | Used by | Notes |
@@ -129,6 +260,13 @@ handles that) — DNS and port-forwarding are two separate requirements, and
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | `create_domain_record`, `delete_domain_record`, `create_txt_record`, `issue_wildcard_cert` | Credentials for a Route-53-scoped IAM user — no other AWS permissions needed |
 | `ROUTE53_HOSTED_ZONE_ID` | `create_domain_record`, `delete_domain_record`, `create_txt_record` | Find with `aws route53 list-hosted-zones-by-name --dns-name julcap.net` |
 | `AWS_DEFAULT_REGION` | Same as above, plus `issue_wildcard_cert` | Optional — Route 53 is global, but the AWS SDK/boto3 still need a signing region; defaults to `us-east-1` |
+| `AUDIT_LOG_PATH` | All mutating tools | Optional — audit log file; default `~/.nginx-certbot-mcp/audit.jsonl`, `off` disables. See [Audit log](#audit-log) |
+| `MCP_MODE` | All tools | Optional — `readwrite` (default) or `readonly`. See [Read-only mode](#read-only-mode-and-tool-allowlist) |
+| `MCP_ENABLED_TOOLS` | All tools | Optional — comma-separated tool names / `*` patterns to expose; default all |
+| `ALLOWED_DOMAINS` | All tools taking a `domain` | Optional — comma-separated `example.com` / `*.example.com` entries the agent may act on; default any. See [Domain allowlist](#domain-allowlist) |
+| `RATE_LIMIT_GUARD` | `issue_cert`, `issue_wildcard_cert` | Optional — `off` disables the [production issuance guard](#production-issuance-guard) |
+| `MCP_STATE_DIR` | `issue_cert`, `issue_wildcard_cert` | Optional — where the guard keeps its issuance history; default `~/.nginx-certbot-mcp` |
+| `AUDIT_LOG_READS` | Read-only tools | Optional — `true` also audits read-only calls |
 
 ## Testing
 
@@ -247,6 +385,31 @@ Or against the running Docker sandbox:
 }
 ```
 
+## Diagnosing a site
+
+When a site misbehaves, start with `diagnose_site` instead of calling the
+individual checks one by one. It runs, in parallel, and reports each as
+`ok` / `warn` / `fail` / `skipped`:
+
+| Check | Looks at |
+|---|---|
+| `config` | config exists, is enabled, `server_name` matches, upstream and SSL parsed out |
+| `nginx` | service running, and `nginx -t` passes |
+| `dns` | the domain resolves (CNAME, then A/AAAA) |
+| `upstream` | the `proxy_pass` target accepts a TCP connection |
+| `certificate` | a certbot cert covers the domain (wildcards included), days left, and that the config actually uses it |
+| `recent_errors` | the latest nginx error-log lines mentioning the domain or its upstream |
+
+The result also has an overall `healthy` flag (no check failed — warnings
+and skipped checks don't count) and `next_steps`: the specific tools that
+would fix each problem, e.g. `create_domain_record` for a domain that
+doesn't resolve or `rollback_site` after a config that no longer passes
+`nginx -t`. A check that can't run (say, certbot isn't installed) is
+reported as `skipped` with the reason; it doesn't sink the rest.
+
+It is read-only, so it's available in `MCP_MODE=readonly`, and it respects
+`ALLOWED_DOMAINS`.
+
 ## Typical "add a new site" flow
 
 1. `create_domain_record` — point `mysite.julcap.net` at `www.julcap.net`
@@ -270,3 +433,21 @@ However, you may not provide a substantial portion of its functionality
 to third parties as a hosted or managed service.
 
 For commercial licensing or partnership enquiries, contact the maintainer.
+
+## TODO
+
+Planned, not yet implemented:
+
+- [ ] **`provision_site` workflow tool** — DNS record, nginx site, reload and
+  certificate in one call, rolling back the steps already taken if a later
+  one fails. Today the agent has to sequence the
+  [add-a-site flow](#typical-add-a-new-site-flow) itself.
+- [ ] **Certificate expiry alerts** — a `warn_days` threshold on
+  `check_cert_expiry` and an optional webhook (Slack / Discord) for
+  certificates that are close to expiring.
+- [ ] **Per-site options in `create_site`** — custom headers, client body
+  size, rate limiting, basic auth, IP allowlist, HTTP→HTTPS redirect, HSTS,
+  and a choice of named templates instead of the single default one.
+- [ ] **More DNS providers** — Cloudflare first, alongside Route 53 (certbot
+  already has DNS plugins for it), so the DNS and DNS-01 tools aren't tied to
+  AWS.

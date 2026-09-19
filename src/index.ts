@@ -19,6 +19,9 @@ import { createSite } from "./tools/createSite.js";
 import { updateSite } from "./tools/updateSite.js";
 import { deleteSite } from "./tools/deleteSite.js";
 import { restoreSite } from "./tools/restoreSite.js";
+import { rollbackSite } from "./tools/rollbackSite.js";
+import { listSiteBackups } from "./backups.js";
+import { diagnoseSite } from "./tools/diagnoseSite.js";
 import { pruneArchives } from "./tools/pruneArchives.js";
 import { reloadNginx } from "./tools/reloadNginx.js";
 import { issueCert } from "./tools/issueCert.js";
@@ -27,10 +30,33 @@ import { renewCert } from "./tools/renewCert.js";
 import { revokeCert } from "./tools/revokeCert.js";
 import { deleteCert } from "./tools/deleteCert.js";
 import { MAX_LOG_LINES } from "./config.js";
+import { AuditLogger, resolveAuditPath } from "./audit.js";
+import { createRegistrar } from "./guard.js";
+import { domainFilter, loadPolicy } from "./policy.js";
 
 const server = new McpServer({
   name: "nginx-certbot-mcp",
   version: "0.1.0",
+});
+
+const audit = new AuditLogger(resolveAuditPath(), process.env.AUDIT_LOG_READS === "true");
+let policy;
+try {
+  policy = loadPolicy();
+  await audit.init();
+} catch (err: any) {
+  console.error(err.message);
+  process.exit(1);
+}
+
+// All tools register through this so auditing (and policy) apply uniformly.
+const { registerTool, summary } = createRegistrar(server, {
+  audit,
+  policy,
+  getClient: () => {
+    const client = server.server.getClientVersion();
+    return client ? `${client.name}/${client.version}` : undefined;
+  },
 });
 
 // Shared fragments so the DNS-check result shape isn't repeated across every
@@ -50,7 +76,7 @@ const route53ChangeResultShape = {
 
 // --- Read-only tools ---
 
-server.registerTool(
+registerTool(
   "list_sites",
   {
     description:
@@ -71,7 +97,8 @@ server.registerTool(
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
   async () => {
-    const sites = await listSites();
+    const inScope = domainFilter(policy);
+    const sites = (await listSites()).filter((s) => s.domain.split(/\s+/).every(inScope));
     return {
       content: [{ type: "text", text: JSON.stringify(sites, null, 2) }],
       structuredContent: { sites },
@@ -79,7 +106,7 @@ server.registerTool(
   }
 );
 
-server.registerTool(
+registerTool(
   "get_site_config",
   {
     description:
@@ -100,7 +127,7 @@ server.registerTool(
   }
 );
 
-server.registerTool(
+registerTool(
   "check_cert_expiry",
   {
     description:
@@ -112,6 +139,7 @@ server.registerTool(
       certificates: z.array(
         z.object({
           domain: z.string(),
+          domains: z.array(z.string()).describe("Every name on the certificate, e.g. example.com and *.example.com"),
           expires_at: z.string().describe("Expiry date/time as reported by certbot"),
           days_remaining: z.number().int().describe("Negative if the certificate has already expired"),
           auto_renew_enabled: z.boolean(),
@@ -121,7 +149,7 @@ server.registerTool(
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
   async () => {
-    const certs = await checkCertExpiry();
+    const certs = (await checkCertExpiry()).filter((c) => domainFilter(policy)(c.domain));
     return {
       content: [{ type: "text", text: JSON.stringify(certs, null, 2) }],
       structuredContent: { certificates: certs },
@@ -129,7 +157,7 @@ server.registerTool(
   }
 );
 
-server.registerTool(
+registerTool(
   "check_dns",
   {
     description:
@@ -150,7 +178,7 @@ server.registerTool(
   }
 );
 
-server.registerTool(
+registerTool(
   "check_upstream_health",
   {
     description:
@@ -174,7 +202,7 @@ server.registerTool(
   }
 );
 
-server.registerTool(
+registerTool(
   "get_nginx_status",
   {
     description: "Report whether the nginx service is active (via systemctl) and its version string. Read-only.",
@@ -191,7 +219,7 @@ server.registerTool(
   }
 );
 
-server.registerTool(
+registerTool(
   "tail_site_logs",
   {
     description:
@@ -218,7 +246,7 @@ server.registerTool(
   }
 );
 
-server.registerTool(
+registerTool(
   "list_archived_sites",
   {
     description:
@@ -237,7 +265,7 @@ server.registerTool(
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
   async ({ domain }) => {
-    const result = await listArchivedSites(domain);
+    const result = (await listArchivedSites(domain)).filter((a) => domainFilter(policy)(a.domain));
     return {
       content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
       structuredContent: { archives: result },
@@ -245,9 +273,99 @@ server.registerTool(
   }
 );
 
+registerTool(
+  "list_site_backups",
+  {
+    description:
+      "List the automatic backups of site configs, newest first. A backup is taken of the " +
+      "existing config just before create_site, update_site, restore_site or rollback_site " +
+      "changes it (the newest 10 per domain are kept). Feed a filename from here into " +
+      "rollback_site's backup_filename to return to a specific version instead of the newest. " +
+      "Not the same as list_archived_sites, which holds configs removed by delete_site.",
+    inputSchema: { domain: z.string().optional().describe("Filter to one domain's backups") },
+    outputSchema: {
+      backups: z.array(
+        z.object({
+          domain: z.string(),
+          filename: z.string().describe("Pass this to rollback_site's backup_filename to pick this backup"),
+          backed_up_at: z.string().describe("YYYY-MM-DD HH:MM:SS, server-local time"),
+        })
+      ),
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  async ({ domain }) => {
+    const result = (await listSiteBackups(domain)).filter((b) => domainFilter(policy)(b.domain));
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      structuredContent: { backups: result },
+    };
+  }
+);
+
+const checkStatusShape = z.enum(["ok", "warn", "fail", "skipped"]);
+
+registerTool(
+  "diagnose_site",
+  {
+    description:
+      "One-call health report for a domain: whether its nginx config exists and is enabled, " +
+      "whether nginx is running and passes `nginx -t`, whether the domain resolves, whether the " +
+      "upstream accepts TCP connections, whether a certificate covers it (and how long is left), " +
+      "and recent nginx error-log lines mentioning the site or its upstream. Read-only. Returns " +
+      "per-check status (ok/warn/fail/skipped), an overall `healthy` flag, and `next_steps` naming " +
+      "the tools that would fix each problem. Start here when a site is misbehaving instead of " +
+      "calling the individual check_* tools one by one.",
+    inputSchema: {
+      domain: z.string().describe("Domain to diagnose, e.g. mysite.julcap.net"),
+    },
+    outputSchema: {
+      domain: z.string(),
+      healthy: z.boolean().describe("True when no check failed; warnings and skipped checks don't count"),
+      summary: z.string(),
+      checks: z.object({
+        config: z.object({
+          status: checkStatusShape, detail: z.string(),
+          enabled: z.boolean().optional(),
+          upstream: z.string().nullable().optional(),
+          ssl_enabled: z.boolean().optional(),
+        }),
+        nginx: z.object({
+          status: checkStatusShape, detail: z.string(),
+          running: z.boolean().optional(),
+          version: z.string().optional(),
+          config_test_passed: z.boolean().optional(),
+        }),
+        dns: z.object({
+          status: checkStatusShape, detail: z.string(),
+          record_type: z.string().optional(),
+          values: z.array(z.string()).optional(),
+        }),
+        upstream: z.object({ status: checkStatusShape, detail: z.string() }),
+        certificate: z.object({
+          status: checkStatusShape, detail: z.string(),
+          cert_name: z.string().optional(),
+          expires_at: z.string().optional(),
+          days_remaining: z.number().int().optional(),
+        }),
+        recent_errors: z.object({
+          status: checkStatusShape, detail: z.string(),
+          lines: z.array(z.string()).describe("Latest matching nginx error-log lines, oldest first"),
+        }),
+      }),
+      next_steps: z.array(z.string()).describe("Suggested tools/actions for each warning or failure; empty when all is well"),
+    },
+    annotations: { readOnlyHint: true, openWorldHint: true },
+  },
+  async ({ domain }) => {
+    const result = await diagnoseSite(domain);
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], structuredContent: result as unknown as Record<string, unknown> };
+  }
+);
+
 // --- DNS (Route 53) ---
 
-server.registerTool(
+registerTool(
   "create_domain_record",
   {
     description:
@@ -270,7 +388,7 @@ server.registerTool(
   }
 );
 
-server.registerTool(
+registerTool(
   "delete_domain_record",
   {
     description:
@@ -290,7 +408,7 @@ server.registerTool(
   }
 );
 
-server.registerTool(
+registerTool(
   "create_txt_record",
   {
     description:
@@ -313,7 +431,7 @@ server.registerTool(
   }
 );
 
-server.registerTool(
+registerTool(
   "delete_txt_record",
   {
     description:
@@ -337,7 +455,7 @@ server.registerTool(
 
 // --- Site lifecycle ---
 
-server.registerTool(
+registerTool(
   "create_site",
   {
     description:
@@ -345,7 +463,8 @@ server.registerTool(
       "Validates and test-renders (`nginx -t`) before touching live config, and rolls back " +
       "automatically if the test fails. Does NOT reload nginx or request a certificate - follow " +
       "with reload_nginx to go live, then issue_cert to get SSL. To point an existing site at a " +
-      "different upstream later, use update_site instead of recreating it.",
+      "different upstream later, use update_site instead of recreating it. If a config for the " +
+      "domain already exists it is replaced - after being backed up (see rollback_site).",
     inputSchema: {
       domain: z.string().describe("Domain for the new server block, e.g. mysite.julcap.net"),
       upstream_host: z.string().describe("Hostname or IP nginx should proxy_pass to"),
@@ -356,6 +475,7 @@ server.registerTool(
       config_path: z.string().optional().describe("Present on success: absolute path of the written config"),
       test_output: z.string().describe("Output of `nginx -t` against the rendered config"),
       reload_required: z.boolean().describe("True on success - nginx has not actually been reloaded yet"),
+      backup_created: z.boolean().optional().describe("True if an existing config was replaced; it was backed up first (see rollback_site)"),
     },
     annotations: { destructiveHint: false, openWorldHint: false },
   },
@@ -365,7 +485,7 @@ server.registerTool(
   }
 );
 
-server.registerTool(
+registerTool(
   "update_site",
   {
     description:
@@ -373,8 +493,9 @@ server.registerTool(
       "everything else in the config, including any SSL server block issue_cert/certbot added, " +
       "is left untouched. Fails if the domain has no existing config (use create_site instead) " +
       "or has no proxy_pass directive to update. Test-renders before keeping the change and " +
-      "rolls back automatically if `nginx -t` fails. Does NOT reload nginx - call reload_nginx " +
-      "afterward.",
+      "rolls back automatically if `nginx -t` fails. The previous config is backed up first, so " +
+      "a bad-but-valid change can be undone later with rollback_site. Does NOT reload nginx - " +
+      "call reload_nginx afterward.",
     inputSchema: {
       domain: z.string().describe("Domain of the existing site to update"),
       upstream_host: z.string().describe("New hostname or IP nginx should proxy_pass to"),
@@ -384,6 +505,7 @@ server.registerTool(
       success: z.boolean(),
       test_output: z.string().describe("Output of `nginx -t` against the rewritten config, or an explanatory message if nothing was changed"),
       reload_required: z.boolean().describe("True on success - nginx has not actually been reloaded yet"),
+      backup_created: z.boolean().optional().describe("True once the previous config was backed up; undo with rollback_site"),
     },
     annotations: { destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
@@ -393,7 +515,7 @@ server.registerTool(
   }
 );
 
-server.registerTool(
+registerTool(
   "delete_site",
   {
     description:
@@ -418,12 +540,13 @@ server.registerTool(
   }
 );
 
-server.registerTool(
+registerTool(
   "restore_site",
   {
     description:
       "Restore a domain's nginx config from its most recent archive (created by delete_site) " +
-      "and enable it. Destructive to any current config for that domain - requires confirm:true. " +
+      "and enable it. Destructive to any current config for that domain (which is backed up " +
+      "first, see rollback_site) - requires confirm:true. " +
       "Test-renders before enabling and rolls back automatically if that fails. Does NOT reload " +
       "nginx - call reload_nginx afterward.",
     inputSchema: {
@@ -447,7 +570,38 @@ server.registerTool(
   }
 );
 
-server.registerTool(
+registerTool(
+  "rollback_site",
+  {
+    description:
+      "Undo a config change: replace a site's current nginx config with a backup taken by " +
+      "create_site, update_site, restore_site or a previous rollback_site (see list_site_backups). " +
+      "Defaults to the newest backup, i.e. the config as it was before the last change. The " +
+      "current config is backed up first, so calling this again flips back. Requires confirm:true. " +
+      "Test-renders before keeping the result and leaves the current config in place if `nginx -t` " +
+      "fails. Does NOT reload nginx - call reload_nginx afterward.",
+    inputSchema: {
+      domain: z.string().describe("Domain whose config should be rolled back"),
+      confirm: z.boolean().default(false).describe("Must be true to actually act; false (default) is a dry run"),
+      backup_filename: z
+        .string()
+        .optional()
+        .describe("A filename from list_site_backups; defaults to the newest backup for this domain"),
+    },
+    outputSchema: {
+      success: z.boolean(),
+      message: z.string(),
+      reload_required: z.boolean().describe("True on success - nginx has not actually been reloaded yet"),
+    },
+    annotations: { destructiveHint: true, openWorldHint: false },
+  },
+  async ({ domain, confirm, backup_filename }) => {
+    const result = await rollbackSite({ domain, confirm, backup_filename });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], structuredContent: result as unknown as Record<string, unknown> };
+  }
+);
+
+registerTool(
   "prune_archives",
   {
     description:
@@ -466,14 +620,14 @@ server.registerTool(
     annotations: { destructiveHint: true, idempotentHint: true, openWorldHint: false },
   },
   async ({ older_than_days, confirm }) => {
-    const result = await pruneArchives({ older_than_days, confirm });
+    const result = await pruneArchives({ older_than_days, confirm, isAllowed: domainFilter(policy) });
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], structuredContent: result as unknown as Record<string, unknown> };
   }
 );
 
 // --- Nginx ---
 
-server.registerTool(
+registerTool(
   "reload_nginx",
   {
     description:
@@ -484,6 +638,7 @@ server.registerTool(
     outputSchema: {
       success: z.boolean(),
       test_output: z.string().describe("Combined stdout/stderr of `nginx -t`"),
+      hint: z.string().optional().describe("Present on failure: how to recover, e.g. via rollback_site"),
     },
     annotations: { destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
@@ -495,7 +650,7 @@ server.registerTool(
 
 // --- Certificate lifecycle ---
 
-server.registerTool(
+registerTool(
   "issue_cert",
   {
     description:
@@ -509,7 +664,9 @@ server.registerTool(
       "certs but is exempt from rate limits - pass staging:false only when you're ready for a " +
       "real, publicly CT-logged certificate: production Let's Encrypt enforces real per-domain " +
       "issuance rate limits (a handful of certs per week), and a mis-issued cert isn't silently " +
-      "undone - call revoke_cert if you need to invalidate one. For a *.domain wildcard, use " +
+      "undone - call revoke_cert if you need to invalidate one. A local guard also refuses " +
+      "production requests that would exceed Let's Encrypt's duplicate-certificate, " +
+      "failed-validation or per-domain limits, reporting when to retry. For a *.domain wildcard, use " +
       "issue_wildcard_cert instead - HTTP-01 can't validate wildcards.",
     inputSchema: {
       domain: z
@@ -540,6 +697,13 @@ server.registerTool(
       success: z.boolean(),
       certbot_output: z.string().describe("Raw combined stdout/stderr from the certbot CLI invocation, on success or failure"),
       dns_check: z.object(dnsCheckResultShape).optional().describe("Present only when the DNS pre-check failed, before certbot was even invoked"),
+      rate_limit_note: z
+        .string()
+        .optional()
+        .describe(
+          "Set when the local rate-limit guard refused a production request (with when to retry), " +
+            "or when a Let's Encrypt production limit is close"
+        ),
     },
     annotations: { destructiveHint: false, openWorldHint: true },
   },
@@ -549,7 +713,7 @@ server.registerTool(
   }
 );
 
-server.registerTool(
+registerTool(
   "issue_wildcard_cert",
   {
     description:
@@ -557,7 +721,8 @@ server.registerTool(
       "(DNS-01 validation, required since HTTP-01 can't prove ownership of a wildcard). " +
       "Requires the certbot-dns-route53 plugin installed on the box and AWS credentials in the " +
       "environment (see README) - fails fast with guidance if credentials are missing. Defaults " +
-      "to staging. For a single non-wildcard domain, use issue_cert instead.",
+      "to staging; a local guard refuses production requests that would exceed Let's Encrypt's " +
+      "rate limits, reporting when to retry. For a single non-wildcard domain, use issue_cert instead.",
     inputSchema: {
       domain: z.string().describe("Base domain, e.g. julcap.net - issues it plus *.julcap.net"),
       staging: z
@@ -569,6 +734,13 @@ server.registerTool(
     outputSchema: {
       success: z.boolean(),
       certbot_output: z.string(),
+      rate_limit_note: z
+        .string()
+        .optional()
+        .describe(
+          "Set when the local rate-limit guard refused a production request (with when to retry), " +
+            "or when a Let's Encrypt production limit is close"
+        ),
     },
     annotations: { destructiveHint: false, openWorldHint: true },
   },
@@ -578,7 +750,7 @@ server.registerTool(
   }
 );
 
-server.registerTool(
+registerTool(
   "renew_cert",
   {
     description:
@@ -602,7 +774,7 @@ server.registerTool(
   }
 );
 
-server.registerTool(
+registerTool(
   "revoke_cert",
   {
     description:
@@ -626,7 +798,7 @@ server.registerTool(
   }
 );
 
-server.registerTool(
+registerTool(
   "delete_cert",
   {
     description:
@@ -649,6 +821,14 @@ server.registerTool(
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], structuredContent: result as unknown as Record<string, unknown> };
   }
 );
+
+// stdout is the MCP protocol channel - operator-facing notices go to stderr.
+const { registered, skipped, warnings } = summary();
+console.error(
+  `[nginx-certbot-mcp] mode=${policy.mode}, ${registered.length} of ${registered.length + skipped.length} tools enabled` +
+    (audit.enabled ? `, audit log: ${audit.path}` : ", audit log: off")
+);
+for (const warning of warnings) console.error(`[nginx-certbot-mcp] warning: ${warning}`);
 
 const transport = new StdioServerTransport();
 await server.connect(transport);

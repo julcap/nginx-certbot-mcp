@@ -8,7 +8,7 @@ export interface ArchivedSite {
   archived_at: string; // "YYYY-MM-DD HH:MM:SS", server-local time from the archive timestamp
 }
 
-function timestampToDisplay(ts: string): string {
+export function timestampToDisplay(ts: string): string {
   // "YYYYMMDDTHHMMSS" -> "YYYY-MM-DD HH:MM:SS"
   const m = ts.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})$/);
   if (!m) return ts;

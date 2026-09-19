@@ -1,7 +1,12 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { assertValidDomain } from "../validate.js";
+import { NGINX_SITES_AVAILABLE } from "../config.js";
+import { backupSite } from "../backups.js";
 import { listArchivedSites } from "./listArchivedSites.js";
+import { writeSiteAsRoot } from "./createSite.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -57,6 +62,17 @@ export async function restoreSite(input: RestoreSiteInput): Promise<RestoreSiteR
     };
   }
 
+  // The restore overwrites any current config, so snapshot it first and put
+  // it back if the archived one doesn't pass `nginx -t`.
+  const previous = await readFile(path.join(NGINX_SITES_AVAILABLE, domain), "utf-8").catch(() => null);
+  if (previous !== null) {
+    try {
+      await backupSite(domain);
+    } catch (err: any) {
+      return { success: false, message: err.message, reload_required: false };
+    }
+  }
+
   try {
     await runWrapper(["restore", domain, target.filename]);
     const test = await execFileAsync("sudo", ["nginx", "-t"]);
@@ -70,7 +86,8 @@ export async function restoreSite(input: RestoreSiteInput): Promise<RestoreSiteR
   } catch (err: any) {
     // Test (or enable) failed - undo the restore rather than leaving a
     // half-applied config sitting in sites-available.
-    await runWrapper(["remove", domain]).catch(() => {});
+    if (previous !== null) await writeSiteAsRoot(domain, previous).catch(() => {});
+    else await runWrapper(["remove", domain]).catch(() => {});
     return {
       success: false,
       message: err.stderr ?? err.message ?? String(err),

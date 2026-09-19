@@ -7,6 +7,7 @@ const execFileAsync = promisify(execFile);
 export interface PruneArchivesInput {
   older_than_days?: number; // defaults to 30
   confirm: boolean;
+  isAllowed?: (domain: string) => boolean; // restricts which domains' archives are considered
 }
 
 export interface PruneArchivesResult {
@@ -16,9 +17,9 @@ export interface PruneArchivesResult {
 }
 
 export async function pruneArchives(input: PruneArchivesInput): Promise<PruneArchivesResult> {
-  const { older_than_days = 30, confirm } = input;
+  const { older_than_days = 30, confirm, isAllowed } = input;
 
-  const all = await listArchivedSites();
+  const all = (await listArchivedSites()).filter((a) => !isAllowed || isAllowed(a.domain));
   const stale: string[] = [];
   for (const archive of all) {
     if ((await fileAgeDays(archive.filename)) > older_than_days) {

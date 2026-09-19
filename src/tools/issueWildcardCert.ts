@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { assertValidDomain } from "../validate.js";
+import { checkBeforeIssuing, looksLikeValidationFailure, recordIssuance } from "../rateGuard.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -13,6 +14,7 @@ export interface IssueWildcardCertInput {
 export interface IssueWildcardCertResult {
   success: boolean;
   certbot_output: string;
+  rate_limit_note?: string; // set when the local guard refused, or a production limit is close
 }
 
 // Wildcard certs require DNS-01 validation (HTTP-01, what issue_cert uses,
@@ -33,6 +35,14 @@ export async function issueWildcardCert(
         "Missing AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY - copy .env.example to .env and " +
         "fill them in. certbot-dns-route53 needs these to create the DNS-01 challenge record.",
     };
+  }
+
+  // Production only: refuse before spending an attempt that Let's Encrypt
+  // would count against the real per-week limits.
+  const names = [domain, `*.${domain}`];
+  const verdict = await checkBeforeIssuing(names, staging);
+  if (verdict.blocked) {
+    return { success: false, certbot_output: verdict.note!, rate_limit_note: verdict.note };
   }
 
   const args = [
@@ -66,8 +76,11 @@ export async function issueWildcardCert(
         AWS_DEFAULT_REGION: process.env.AWS_DEFAULT_REGION || "us-east-1",
       },
     });
-    return { success: true, certbot_output: stdout + stderr };
+    await recordIssuance(names, staging, true);
+    return { success: true, certbot_output: stdout + stderr, rate_limit_note: verdict.note };
   } catch (err: any) {
-    return { success: false, certbot_output: err.stderr ?? String(err) };
+    const output = err.stderr ?? String(err);
+    if (looksLikeValidationFailure(output)) await recordIssuance(names, staging, false);
+    return { success: false, certbot_output: output, rate_limit_note: verdict.note };
   }
 }

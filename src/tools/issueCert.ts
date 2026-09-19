@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { assertValidDomain } from "../validate.js";
 import { checkDomainResolution, type DnsCheckResult } from "../dns.js";
+import { checkBeforeIssuing, looksLikeValidationFailure, recordIssuance } from "../rateGuard.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -15,6 +16,7 @@ export interface IssueCertResult {
   success: boolean;
   certbot_output: string;
   dns_check?: DnsCheckResult;
+  rate_limit_note?: string; // set when the local guard refused, or a production limit is close
 }
 
 export async function issueCert(input: IssueCertInput): Promise<IssueCertResult> {
@@ -35,6 +37,13 @@ export async function issueCert(input: IssueCertInput): Promise<IssueCertResult>
     };
   }
 
+  // Production only: refuse before spending an attempt that Let's Encrypt
+  // would count against the real per-week limits.
+  const verdict = await checkBeforeIssuing([domain], staging);
+  if (verdict.blocked) {
+    return { success: false, certbot_output: verdict.note!, rate_limit_note: verdict.note };
+  }
+
   const args = ["--nginx", "-d", domain, "--non-interactive", "--agree-tos"];
   if (staging) args.push("--staging");
   if (email) {
@@ -51,8 +60,11 @@ export async function issueCert(input: IssueCertInput): Promise<IssueCertResult>
   // path exercised in dev/testing. Only flip to false deliberately.
   try {
     const { stdout, stderr } = await execFileAsync("sudo", ["certbot", ...args]);
-    return { success: true, certbot_output: stdout + stderr };
+    await recordIssuance([domain], staging, true);
+    return { success: true, certbot_output: stdout + stderr, rate_limit_note: verdict.note };
   } catch (err: any) {
-    return { success: false, certbot_output: err.stderr ?? String(err) };
+    const output = err.stderr ?? String(err);
+    if (looksLikeValidationFailure(output)) await recordIssuance([domain], staging, false);
+    return { success: false, certbot_output: output, rate_limit_note: verdict.note };
   }
 }

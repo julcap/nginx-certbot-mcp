@@ -17,6 +17,20 @@ function extractField(content: string, directive: string): string | null {
   return match ? match[1].trim() : null;
 }
 
+export interface ParsedSiteConfig {
+  server_name: string | null;
+  upstream: string | null;
+  ssl_enabled: boolean;
+}
+
+export function parseSiteConfig(content: string): ParsedSiteConfig {
+  return {
+    server_name: extractField(content, "server_name"),
+    upstream: extractField(content, "proxy_pass"),
+    ssl_enabled: /listen\s+443\s+ssl/.test(content) || content.includes("ssl_certificate "),
+  };
+}
+
 export async function listSites(): Promise<SiteSummary[]> {
   const entries = await readdir(NGINX_SITES_ENABLED);
   const sites: SiteSummary[] = [];
@@ -29,15 +43,13 @@ export async function listSites(): Promise<SiteSummary[]> {
     const content = await readFile(fullPath, "utf-8").catch(() => "");
     if (!content) continue;
 
-    const domain = extractField(content, "server_name") ?? entry;
-    const proxyPass = extractField(content, "proxy_pass");
-    const sslEnabled = /listen\s+443\s+ssl/.test(content) || content.includes("ssl_certificate ");
+    const parsed = parseSiteConfig(content);
 
     sites.push({
-      domain,
+      domain: parsed.server_name ?? entry,
       config_path: fullPath,
-      upstream: proxyPass,
-      ssl_enabled: sslEnabled,
+      upstream: parsed.upstream,
+      ssl_enabled: parsed.ssl_enabled,
     });
   }
 
