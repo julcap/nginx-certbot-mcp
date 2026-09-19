@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFile, stat } from "node:fs/promises";
+import { readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { AuditLogger, DEFAULT_AUDIT_PATH, redactArgs, resolveAuditPath, truncate } from "../../src/audit.js";
 import { startServer, tempDir, textOf } from "./helpers.js";
@@ -44,7 +44,11 @@ test("AuditLogger writes 0600 JSONL and init fails on an unwritable path", async
     assert.equal(JSON.parse(lines[0]).tool, "t");
     assert.equal((await stat(file)).mode & 0o777, 0o600);
 
-    await assert.rejects(new AuditLogger("/proc/definitely/not/writable/audit.jsonl").init(), /Cannot write audit log/);
+    // A path *under a regular file* can't be created on any OS or user (root included).
+    // Not /proc/...: recursive mkdir there hangs on Linux instead of failing.
+    const blocker = path.join(dir, "blocker");
+    await writeFile(blocker, "");
+    await assert.rejects(new AuditLogger(path.join(blocker, "audit.jsonl")).init(), /Cannot write audit log/);
     await new AuditLogger(null).init(); // disabled: no-op
   } finally {
     await cleanup();
@@ -92,5 +96,11 @@ test("server audits mutating calls (incl. dry runs) and only logs reads when ask
 });
 
 test("server refuses to start when the audit log is unwritable", async () => {
-  await assert.rejects(startServer({ AUDIT_LOG_PATH: "/proc/definitely/not/writable/audit.jsonl" }));
+  const { dir, cleanup } = await tempDir();
+  try {
+    await writeFile(path.join(dir, "blocker"), "");
+    await assert.rejects(startServer({ AUDIT_LOG_PATH: path.join(dir, "blocker", "audit.jsonl") }));
+  } finally {
+    await cleanup();
+  }
 });
