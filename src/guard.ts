@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { AuditLogger, redactArgs, truncate, type AuditOutcome } from "./audit.js";
+import { isToolEnabled, unmatchedPatterns, type Policy } from "./policy.js";
 
 // Every tool is registered through this instead of server.registerTool
 // directly, so cross-cutting behaviour (auditing, and policy checks) lives in
@@ -7,6 +8,7 @@ import { AuditLogger, redactArgs, truncate, type AuditOutcome } from "./audit.js
 
 export interface GuardOptions {
   audit: AuditLogger;
+  policy: Policy;
   getClient?: () => string | undefined;
 }
 
@@ -32,12 +34,28 @@ function dryRunField(args: any): { dry_run?: boolean } {
   return {};
 }
 
-export function createRegistrar(server: McpServer, options: GuardOptions): McpServer["registerTool"] {
-  const { audit, getClient } = options;
-  const register = server.registerTool.bind(server) as (...args: any[]) => unknown;
+export interface Registrar {
+  registerTool: McpServer["registerTool"];
+  // Call after every tool has been registered.
+  summary(): { registered: string[]; skipped: string[]; warnings: string[] };
+}
 
-  return ((name: string, config: any, handler: (...args: any[]) => Promise<any>) => {
+export function createRegistrar(server: McpServer, options: GuardOptions): Registrar {
+  const { audit, policy, getClient } = options;
+  const register = server.registerTool.bind(server) as (...args: any[]) => unknown;
+  const registered: string[] = [];
+  const skipped: string[] = [];
+
+  const registerTool = ((name: string, config: any, handler: (...args: any[]) => Promise<any>) => {
     const mutating = config.annotations?.readOnlyHint !== true;
+
+    // Tools the operator has switched off are never registered, so the agent
+    // can't see or call them - there's nothing to argue its way past.
+    if (!isToolEnabled(policy, name, !mutating)) {
+      skipped.push(name);
+      return undefined;
+    }
+    registered.push(name);
     const hasInput = config.inputSchema !== undefined;
 
     const wrapped = async (...cbArgs: any[]) => {
@@ -73,4 +91,15 @@ export function createRegistrar(server: McpServer, options: GuardOptions): McpSe
 
     return register(name, config, wrapped);
   }) as McpServer["registerTool"];
+
+  return {
+    registerTool,
+    summary: () => ({
+      registered,
+      skipped,
+      warnings: unmatchedPatterns(policy, [...registered, ...skipped]).map(
+        (p) => `MCP_ENABLED_TOOLS entry "${p}" matches no tool`
+      ),
+    }),
+  };
 }

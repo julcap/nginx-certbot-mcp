@@ -151,6 +151,25 @@ including an unconfirmed dry run), `error` (it threw), or `denied`.
   include them.
 - The file grows forever; point `logrotate` at it if that matters.
 
+### Read-only mode and tool allowlist
+
+Hand an agent visibility without write access, or expose only the tools a
+workflow needs. Tools that are switched off are never registered, so the
+agent can't see or call them.
+
+```bash
+MCP_MODE=readonly                       # only tools annotated read-only
+MCP_ENABLED_TOOLS="check_*,list_sites"  # only these (* is a wildcard)
+```
+
+- `MCP_MODE` is `readwrite` (default) or `readonly`. Read-only mode drops
+  every tool that changes state — DNS, nginx config, certificates, reloads.
+- `MCP_ENABLED_TOOLS` is a comma-separated list of tool names or `*`
+  patterns. When both are set, a tool must pass both.
+- An invalid `MCP_MODE`, or an allowlist entry that matches no tool, is
+  reported on stderr at startup (the former is fatal) rather than silently
+  exposing the wrong set.
+
 ## Environment variables
 
 | Variable | Used by | Notes |
@@ -159,6 +178,8 @@ including an unconfirmed dry run), `error` (it threw), or `denied`.
 | `ROUTE53_HOSTED_ZONE_ID` | `create_domain_record`, `delete_domain_record`, `create_txt_record` | Find with `aws route53 list-hosted-zones-by-name --dns-name julcap.net` |
 | `AWS_DEFAULT_REGION` | Same as above, plus `issue_wildcard_cert` | Optional — Route 53 is global, but the AWS SDK/boto3 still need a signing region; defaults to `us-east-1` |
 | `AUDIT_LOG_PATH` | All mutating tools | Optional — audit log file; default `~/.nginx-certbot-mcp/audit.jsonl`, `off` disables. See [Audit log](#audit-log) |
+| `MCP_MODE` | All tools | Optional — `readwrite` (default) or `readonly`. See [Read-only mode](#read-only-mode-and-tool-allowlist) |
+| `MCP_ENABLED_TOOLS` | All tools | Optional — comma-separated tool names / `*` patterns to expose; default all |
 | `AUDIT_LOG_READS` | Read-only tools | Optional — `true` also audits read-only calls |
 
 ## Testing

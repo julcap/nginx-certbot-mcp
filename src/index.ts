@@ -29,6 +29,7 @@ import { deleteCert } from "./tools/deleteCert.js";
 import { MAX_LOG_LINES } from "./config.js";
 import { AuditLogger, resolveAuditPath } from "./audit.js";
 import { createRegistrar } from "./guard.js";
+import { loadPolicy } from "./policy.js";
 
 const server = new McpServer({
   name: "nginx-certbot-mcp",
@@ -36,7 +37,9 @@ const server = new McpServer({
 });
 
 const audit = new AuditLogger(resolveAuditPath(), process.env.AUDIT_LOG_READS === "true");
+let policy;
 try {
+  policy = loadPolicy();
   await audit.init();
 } catch (err: any) {
   console.error(err.message);
@@ -44,8 +47,9 @@ try {
 }
 
 // All tools register through this so auditing (and policy) apply uniformly.
-const registerTool = createRegistrar(server, {
+const { registerTool, summary } = createRegistrar(server, {
   audit,
+  policy,
   getClient: () => {
     const client = server.server.getClientVersion();
     return client ? `${client.name}/${client.version}` : undefined;
@@ -668,6 +672,14 @@ registerTool(
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], structuredContent: result as unknown as Record<string, unknown> };
   }
 );
+
+// stdout is the MCP protocol channel - operator-facing notices go to stderr.
+const { registered, skipped, warnings } = summary();
+console.error(
+  `[nginx-certbot-mcp] mode=${policy.mode}, ${registered.length} of ${registered.length + skipped.length} tools enabled` +
+    (audit.enabled ? `, audit log: ${audit.path}` : ", audit log: off")
+);
+for (const warning of warnings) console.error(`[nginx-certbot-mcp] warning: ${warning}`);
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
