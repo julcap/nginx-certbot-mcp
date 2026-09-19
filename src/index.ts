@@ -19,6 +19,8 @@ import { createSite } from "./tools/createSite.js";
 import { updateSite } from "./tools/updateSite.js";
 import { deleteSite } from "./tools/deleteSite.js";
 import { restoreSite } from "./tools/restoreSite.js";
+import { rollbackSite } from "./tools/rollbackSite.js";
+import { listSiteBackups } from "./backups.js";
 import { pruneArchives } from "./tools/pruneArchives.js";
 import { reloadNginx } from "./tools/reloadNginx.js";
 import { issueCert } from "./tools/issueCert.js";
@@ -269,6 +271,36 @@ registerTool(
   }
 );
 
+registerTool(
+  "list_site_backups",
+  {
+    description:
+      "List the automatic backups of site configs, newest first. A backup is taken of the " +
+      "existing config just before create_site, update_site, restore_site or rollback_site " +
+      "changes it (the newest 10 per domain are kept). Feed a filename from here into " +
+      "rollback_site's backup_filename to return to a specific version instead of the newest. " +
+      "Not the same as list_archived_sites, which holds configs removed by delete_site.",
+    inputSchema: { domain: z.string().optional().describe("Filter to one domain's backups") },
+    outputSchema: {
+      backups: z.array(
+        z.object({
+          domain: z.string(),
+          filename: z.string().describe("Pass this to rollback_site's backup_filename to pick this backup"),
+          backed_up_at: z.string().describe("YYYY-MM-DD HH:MM:SS, server-local time"),
+        })
+      ),
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  async ({ domain }) => {
+    const result = (await listSiteBackups(domain)).filter((b) => domainFilter(policy)(b.domain));
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      structuredContent: { backups: result },
+    };
+  }
+);
+
 // --- DNS (Route 53) ---
 
 registerTool(
@@ -369,7 +401,8 @@ registerTool(
       "Validates and test-renders (`nginx -t`) before touching live config, and rolls back " +
       "automatically if the test fails. Does NOT reload nginx or request a certificate - follow " +
       "with reload_nginx to go live, then issue_cert to get SSL. To point an existing site at a " +
-      "different upstream later, use update_site instead of recreating it.",
+      "different upstream later, use update_site instead of recreating it. If a config for the " +
+      "domain already exists it is replaced - after being backed up (see rollback_site).",
     inputSchema: {
       domain: z.string().describe("Domain for the new server block, e.g. mysite.julcap.net"),
       upstream_host: z.string().describe("Hostname or IP nginx should proxy_pass to"),
@@ -380,6 +413,7 @@ registerTool(
       config_path: z.string().optional().describe("Present on success: absolute path of the written config"),
       test_output: z.string().describe("Output of `nginx -t` against the rendered config"),
       reload_required: z.boolean().describe("True on success - nginx has not actually been reloaded yet"),
+      backup_created: z.boolean().optional().describe("True if an existing config was replaced; it was backed up first (see rollback_site)"),
     },
     annotations: { destructiveHint: false, openWorldHint: false },
   },
@@ -397,8 +431,9 @@ registerTool(
       "everything else in the config, including any SSL server block issue_cert/certbot added, " +
       "is left untouched. Fails if the domain has no existing config (use create_site instead) " +
       "or has no proxy_pass directive to update. Test-renders before keeping the change and " +
-      "rolls back automatically if `nginx -t` fails. Does NOT reload nginx - call reload_nginx " +
-      "afterward.",
+      "rolls back automatically if `nginx -t` fails. The previous config is backed up first, so " +
+      "a bad-but-valid change can be undone later with rollback_site. Does NOT reload nginx - " +
+      "call reload_nginx afterward.",
     inputSchema: {
       domain: z.string().describe("Domain of the existing site to update"),
       upstream_host: z.string().describe("New hostname or IP nginx should proxy_pass to"),
@@ -408,6 +443,7 @@ registerTool(
       success: z.boolean(),
       test_output: z.string().describe("Output of `nginx -t` against the rewritten config, or an explanatory message if nothing was changed"),
       reload_required: z.boolean().describe("True on success - nginx has not actually been reloaded yet"),
+      backup_created: z.boolean().optional().describe("True once the previous config was backed up; undo with rollback_site"),
     },
     annotations: { destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
@@ -447,7 +483,8 @@ registerTool(
   {
     description:
       "Restore a domain's nginx config from its most recent archive (created by delete_site) " +
-      "and enable it. Destructive to any current config for that domain - requires confirm:true. " +
+      "and enable it. Destructive to any current config for that domain (which is backed up " +
+      "first, see rollback_site) - requires confirm:true. " +
       "Test-renders before enabling and rolls back automatically if that fails. Does NOT reload " +
       "nginx - call reload_nginx afterward.",
     inputSchema: {
@@ -467,6 +504,37 @@ registerTool(
   },
   async ({ domain, confirm, archive_filename }) => {
     const result = await restoreSite({ domain, confirm, archive_filename });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], structuredContent: result as unknown as Record<string, unknown> };
+  }
+);
+
+registerTool(
+  "rollback_site",
+  {
+    description:
+      "Undo a config change: replace a site's current nginx config with a backup taken by " +
+      "create_site, update_site, restore_site or a previous rollback_site (see list_site_backups). " +
+      "Defaults to the newest backup, i.e. the config as it was before the last change. The " +
+      "current config is backed up first, so calling this again flips back. Requires confirm:true. " +
+      "Test-renders before keeping the result and leaves the current config in place if `nginx -t` " +
+      "fails. Does NOT reload nginx - call reload_nginx afterward.",
+    inputSchema: {
+      domain: z.string().describe("Domain whose config should be rolled back"),
+      confirm: z.boolean().default(false).describe("Must be true to actually act; false (default) is a dry run"),
+      backup_filename: z
+        .string()
+        .optional()
+        .describe("A filename from list_site_backups; defaults to the newest backup for this domain"),
+    },
+    outputSchema: {
+      success: z.boolean(),
+      message: z.string(),
+      reload_required: z.boolean().describe("True on success - nginx has not actually been reloaded yet"),
+    },
+    annotations: { destructiveHint: true, openWorldHint: false },
+  },
+  async ({ domain, confirm, backup_filename }) => {
+    const result = await rollbackSite({ domain, confirm, backup_filename });
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], structuredContent: result as unknown as Record<string, unknown> };
   }
 );
@@ -508,6 +576,7 @@ registerTool(
     outputSchema: {
       success: z.boolean(),
       test_output: z.string().describe("Combined stdout/stderr of `nginx -t`"),
+      hint: z.string().optional().describe("Present on failure: how to recover, e.g. via rollback_site"),
     },
     annotations: { destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },

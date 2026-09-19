@@ -51,6 +51,7 @@ test("server in readonly mode exposes only read-only tools", async () => {
     assert.ok(tools.every((t) => t.annotations?.readOnlyHint === true), "every listed tool is read-only");
     const names = toolNames({ tools });
     assert.ok(names.includes("list_sites") && !names.includes("create_site") && !names.includes("reload_nginx"));
+    assert.ok(names.includes("list_site_backups") && !names.includes("rollback_site"));
 
     // A mutating tool that isn't registered can't be called at all.
     const result = await client.callTool({ name: "delete_site", arguments: { domain: "a.example.com", confirm: true } });

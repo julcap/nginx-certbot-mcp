@@ -4,6 +4,7 @@ import { promisify } from "node:util";
 import path from "node:path";
 import { NGINX_SITES_AVAILABLE } from "../config.js";
 import { assertValidDomain, assertValidUpstreamHost, assertValidPort } from "../validate.js";
+import { backupSite } from "../backups.js";
 import { writeSiteAsRoot } from "./createSite.js";
 
 const execFileAsync = promisify(execFile);
@@ -18,6 +19,7 @@ export interface UpdateSiteResult {
   success: boolean;
   test_output: string;
   reload_required: boolean;
+  backup_created?: boolean; // the previous config was snapshotted; roll back with rollback_site
 }
 
 // Only the proxy_pass target(s) are rewritten - everything else in the config
@@ -58,15 +60,21 @@ export async function updateSite(input: UpdateSiteInput): Promise<UpdateSiteResu
     };
   }
 
+  try {
+    await backupSite(domain);
+  } catch (err: any) {
+    return { success: false, test_output: err.message, reload_required: false };
+  }
+
   await writeSiteAsRoot(domain, rendered);
 
   try {
     const { stdout, stderr } = await execFileAsync("sudo", ["nginx", "-t"]);
-    return { success: true, test_output: stdout + stderr, reload_required: true };
+    return { success: true, test_output: stdout + stderr, reload_required: true, backup_created: true };
   } catch (err: any) {
     // Test failed - roll back to the previous config rather than leaving a
     // broken one sitting in sites-available.
     await writeSiteAsRoot(domain, previous);
-    return { success: false, test_output: err.stderr ?? String(err), reload_required: false };
+    return { success: false, test_output: err.stderr ?? String(err), reload_required: false, backup_created: true };
   }
 }

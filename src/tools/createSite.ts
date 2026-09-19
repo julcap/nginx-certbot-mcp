@@ -8,6 +8,7 @@ import {
   NGINX_SITES_ENABLED,
   WEBSOCKET_TEMPLATE_PATH,
 } from "../config.js";
+import { backupSite } from "../backups.js";
 import { assertValidDomain, assertValidUpstreamHost, assertValidPort } from "../validate.js";
 
 const execFileAsync = promisify(execFile);
@@ -23,6 +24,7 @@ export interface CreateSiteResult {
   config_path?: string;
   test_output: string;
   reload_required: boolean;
+  backup_created?: boolean; // true when this replaced an existing config, which was snapshotted first
 }
 
 // Exported for update_site, which reuses this to write the config after
@@ -59,6 +61,18 @@ export async function createSite(
 
   const finalPath = path.join(NGINX_SITES_AVAILABLE, domain);
 
+  // create_site overwrites without asking, so anything already there is
+  // snapshotted first and put back if the new config doesn't pass `nginx -t`.
+  const previous = await readFile(finalPath, "utf-8").catch(() => null);
+  let backupCreated = false;
+  if (previous !== null) {
+    try {
+      backupCreated = await backupSite(domain);
+    } catch (err: any) {
+      return { success: false, test_output: err.message, reload_required: false };
+    }
+  }
+
   await writeSiteAsRoot(domain, rendered);
 
   try {
@@ -68,14 +82,17 @@ export async function createSite(
       success: true,
       config_path: finalPath,
       test_output: stdout + stderr,
-      reload_required: true
+      reload_required: true,
+      backup_created: backupCreated,
     };
   } catch (err: any) {
-    await execFileAsync("sudo", ["/usr/local/bin/nginx-mcp-writesite", "remove", domain]);
+    if (previous !== null) await writeSiteAsRoot(domain, previous);
+    else await execFileAsync("sudo", ["/usr/local/bin/nginx-mcp-writesite", "remove", domain]);
     return {
       success: false,
       test_output: err.stderr ?? String(err),
-      reload_required: false
+      reload_required: false,
+      backup_created: backupCreated,
     };
   }
 }

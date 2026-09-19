@@ -38,9 +38,9 @@ const ENV_TEST_EXAMPLE = ".env.test.example";
 // Canonical order for the final report - matches src/index.ts registration.
 const ALL_TOOLS = [
   "list_sites", "get_site_config", "check_cert_expiry", "check_dns",
-  "check_upstream_health", "get_nginx_status", "tail_site_logs", "list_archived_sites",
+  "check_upstream_health", "get_nginx_status", "tail_site_logs", "list_archived_sites", "list_site_backups",
   "create_domain_record", "delete_domain_record", "create_txt_record", "delete_txt_record",
-  "create_site", "update_site", "delete_site", "restore_site", "prune_archives",
+  "create_site", "update_site", "delete_site", "restore_site", "rollback_site", "prune_archives",
   "reload_nginx",
   "issue_cert", "issue_wildcard_cert", "renew_cert", "revoke_cert", "delete_cert",
 ];
@@ -408,6 +408,7 @@ async function main() {
     await step(client, "check_dns", { domain: testDomain }, (p) => p?.resolves === true || `did not resolve "${testDomain}" - does it really exist?`);
     await step(client, "check_upstream_health", { upstream_host: "127.0.0.1", upstream_port: 80 }, (p) => p?.reachable === true);
     await step(client, "list_archived_sites", {}, (p) => Array.isArray(p));
+    await step(client, "list_site_backups", {}, (p) => Array.isArray(p));
 
     console.log("\n5. Site lifecycle:");
     const created = await step(client, "create_site", { domain: testSub, upstream_host: "127.0.0.1", upstream_port: 3000 }, (p) => p?.success === true);
@@ -420,6 +421,18 @@ async function main() {
         const { ok, parsed } = await client.callTool("get_site_config", { domain: testSub });
         if (!ok || !parsed?.raw_config?.includes("127.0.0.1:3001")) {
           console.log(`  WARNING: update_site reported success but proxy_pass doesn't show port 3001`);
+        }
+        // update_site backed up the 3000 config first: it should be listed,
+        // a dry-run rollback should change nothing, and a confirmed one
+        // should put 3000 back (rollback itself is then undoable).
+        await step(client, "list_site_backups", { domain: testSub }, (p) => (Array.isArray(p) && p.length >= 1) || "no backup listed after update_site");
+        await step(client, "rollback_site", { domain: testSub, confirm: false }, (p) => (p?.success === false && /confirm:true/.test(p?.message)) || "expected a dry-run message");
+        const rolledBack = await step(client, "rollback_site", { domain: testSub, confirm: true }, (p) => p?.success === true);
+        if (rolledBack.pass) {
+          const after = await client.callTool("get_site_config", { domain: testSub });
+          if (!after.ok || !after.parsed?.raw_config?.includes("127.0.0.1:3000")) {
+            console.log(`  WARNING: rollback_site reported success but proxy_pass doesn't show port 3000`);
+          }
         }
       }
       await step(client, "reload_nginx", {}, (p) => p?.success === true);
@@ -436,7 +449,7 @@ async function main() {
         report("prune_archives", "skip", "blocked by delete_site failure");
       }
     } else {
-      for (const t of ["get_site_config", "update_site", "reload_nginx", "tail_site_logs", "delete_site", "restore_site", "prune_archives"]) {
+      for (const t of ["get_site_config", "update_site", "list_site_backups", "rollback_site", "reload_nginx", "tail_site_logs", "delete_site", "restore_site", "prune_archives"]) {
         report(t, "skip", "blocked by create_site failure");
       }
     }

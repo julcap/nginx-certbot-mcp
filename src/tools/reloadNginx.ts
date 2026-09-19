@@ -6,6 +6,7 @@ const execFileAsync = promisify(execFile);
 export interface ReloadResult {
   success: boolean;
   test_output: string;
+  hint?: string;
 }
 
 export async function reloadNginx(): Promise<ReloadResult> {
@@ -18,6 +19,12 @@ export async function reloadNginx(): Promise<ReloadResult> {
     await execFileAsync("sudo", ["systemctl", "reload", "nginx"]);
     return { success: true, test_output: test.stdout + test.stderr };
   } catch (err: any) {
-    return { success: false, test_output: err.stderr ?? String(err) };
+    return {
+      success: false,
+      test_output: err.stderr ?? String(err),
+      hint:
+        "nginx was not reloaded. If this follows a recent create_site, update_site, restore_site or " +
+        "rollback_site, call list_site_backups and rollback_site to return to the previous config.",
+    };
   }
 }

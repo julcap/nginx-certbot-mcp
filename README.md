@@ -16,7 +16,7 @@ script](#why-a-wrapper-script-instead-of-sudo-on-teelnrm) below).
 
 ## Tools
 
-All 23 are implemented and exercised against real infrastructure — see
+All 25 are implemented and exercised against real infrastructure — see
 [Testing](#testing).
 
 | Tool | Description |
@@ -29,6 +29,7 @@ All 23 are implemented and exercised against real infrastructure — see
 | `get_nginx_status` | Whether nginx is running, plus its version |
 | `tail_site_logs` | Tail access/error logs, capped at 1000 lines |
 | `list_archived_sites` | List configs archived by `delete_site` |
+| `list_site_backups` | List the automatic pre-change backups of site configs |
 | `create_domain_record` | Upsert a Route 53 CNAME |
 | `delete_domain_record` | Delete a Route 53 CNAME — `confirm:true` |
 | `create_txt_record` | Upsert a Route 53 TXT record, e.g. for ACME DNS-01 |
@@ -37,6 +38,7 @@ All 23 are implemented and exercised against real infrastructure — see
 | `update_site` | Rewrite an existing site's `proxy_pass` upstream in place |
 | `delete_site` | Disable, archive, and delete a server block — `confirm:true` |
 | `restore_site` | Re-enable a site from its newest (or a chosen) archive — `confirm:true` |
+| `rollback_site` | Undo a config change by restoring the newest (or a chosen) backup — `confirm:true` |
 | `prune_archives` | Delete archives older than N days — `confirm:true` |
 | `reload_nginx` | `nginx -t`, then reload only if it passes |
 | `issue_cert` | Issue via HTTP-01 (`certbot --nginx`) — defaults to LE staging |
@@ -64,12 +66,13 @@ update that adds a new allowed command.
 `npm run setup -- <user>` installs two things:
 
 1. **`/usr/local/bin/nginx-mcp-writesite`** — a narrow wrapper script that
-   only accepts `{write|enable|disable|remove|archive|restore|remove-archive}
+   only accepts `{write|enable|disable|remove|archive|restore|remove-archive|backup|restore-backup}
    <domain>` or `log {access|error} <lines>`, and only ever touches paths
    under `/etc/nginx/sites-available/`, `/etc/nginx/sites-enabled/`,
-   `/etc/nginx/sites-archived/`, and the two fixed nginx log files. It
-   re-validates the domain (and, for `restore`/`remove-archive`, the
-   archive filename) itself, independent of the Node-side validation.
+   `/etc/nginx/sites-archived/`, `/etc/nginx/sites-backups/`, and the two
+   fixed nginx log files. It re-validates the domain (and, for
+   `restore`/`remove-archive`/`restore-backup`, the archive or backup
+   filename) itself, independent of the Node-side validation.
 2. **`/etc/sudoers.d/nginx-mcp`** — grants `<user>` passwordless sudo on
    exactly `nginx -t`, `systemctl reload nginx`, `systemctl is-active
    --quiet nginx`, `certbot`, and the wrapper above. Nothing broader. It
@@ -199,6 +202,29 @@ ALLOWED_DOMAINS="example.com,*.example.com"
 This limits which *domains* the tools act on; it doesn't change what the
 `sudo` rules permit the server user to do — see
 [Required permissions](#required-permissions).
+
+### Config backups and rollback
+
+`create_site`, `update_site`, `restore_site` and `rollback_site` snapshot
+a site's existing config before changing it, and each one restores that
+snapshot itself if the new config fails `nginx -t` — so a broken change
+never stays on disk. Backups also cover the case `nginx -t` can't catch: a
+config that is *valid* but wrong (the wrong upstream, say).
+
+- `list_site_backups` shows the snapshots, newest first; `rollback_site`
+  restores the newest one by default (the config as it was before the last
+  change) or a chosen `backup_filename`. It needs `confirm:true`.
+- Rolling back snapshots the current config first, so calling it again
+  flips back — a rollback is never a one-way door.
+- The newest 10 backups per domain are kept in
+  `/etc/nginx/sites-backups/`; older ones are deleted automatically.
+- If a snapshot can't be taken, the change is refused rather than made
+  without a safety net. After upgrading, re-run `npm run setup -- <user>`
+  so the installed helper knows the `backup` action.
+- Backups are separate from `delete_site`'s archives: those are "this site
+  was deleted", backups are "what it looked like before the last change".
+- `reload_nginx` still only reloads a config that passes `nginx -t`; when
+  it refuses, its `hint` points at `rollback_site`.
 
 ## Environment variables
 

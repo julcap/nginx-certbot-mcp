@@ -2,18 +2,20 @@
 # nginx-mcp-writesite - narrow helper for nginx-certbot-mcp.
 # Only ever touches /etc/nginx/sites-available/<domain>,
 # /etc/nginx/sites-enabled/<domain>, /etc/nginx/sites-archived/<domain>.<timestamp>,
-# and (read-only, capped) the two fixed nginx log files - nothing else on the filesystem.
+# /etc/nginx/sites-backups/<domain>.<timestamp>, and (read-only, capped) the two fixed nginx log files - nothing else on the filesystem.
 set -euo pipefail
 
 SITES_AVAILABLE="/etc/nginx/sites-available"
 SITES_ENABLED="/etc/nginx/sites-enabled"
 ARCHIVE_DIR="/etc/nginx/sites-archived"
+BACKUP_DIR="/etc/nginx/sites-backups"
+BACKUP_KEEP=10 # snapshots kept per domain; older ones are deleted on each new backup
 ACCESS_LOG="/var/log/nginx/access.log"
 ERROR_LOG="/var/log/nginx/error.log"
 DOMAIN_RE='^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$'
 
 usage() {
-  echo "Usage: $0 {write|enable|disable|remove|archive|restore|remove-archive} <domain> [archive_filename]" >&2
+  echo "Usage: $0 {write|enable|disable|remove|archive|restore|remove-archive|backup|restore-backup} <domain> [filename]" >&2
   echo "       $0 log {access|error} <lines>" >&2
   exit 1
 }
@@ -46,14 +48,18 @@ DOMAIN="$2"
 AVAILABLE_PATH="$SITES_AVAILABLE/$DOMAIN"
 ENABLED_PATH="$SITES_ENABLED/$DOMAIN"
 
-# Shared by restore/remove-archive: only ever touch a file that's exactly
-# "<domain>.<14-digit-timestamp>", named via a glob rather than a regex so a
-# path-traversal attempt (containing "/" or "..") can never match.
-validate_archive_filename() {
+# Shared by restore/remove-archive/restore-backup/backup pruning: only ever
+# touch a file that's exactly "<domain>.<14-digit-timestamp>", named via a glob
+# rather than a regex so a path-traversal attempt (containing "/" or "..") can
+# never match.
+is_snapshot_name() {
   case "$1" in
     "$DOMAIN".[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]) return 0 ;;
-    *) echo "Invalid archive filename: $1" >&2; exit 1 ;;
+    *) return 1 ;;
   esac
+}
+validate_archive_filename() {
+  is_snapshot_name "$1" || { echo "Invalid archive filename: $1" >&2; exit 1; }
 }
 
 case "$ACTION" in
@@ -82,6 +88,30 @@ case "$ACTION" in
     ARCHIVE_FILE="${3:?Usage: $0 remove-archive <domain> <archive_filename>}"
     validate_archive_filename "$ARCHIVE_FILE"
     rm -f "$ARCHIVE_DIR/$ARCHIVE_FILE"
+    ;;
+  # Snapshots the current config before create_site/update_site/restore_site/
+  # rollback_site change it, so any of them can be undone. Keeps the newest
+  # BACKUP_KEEP per domain.
+  backup)
+    [ -f "$AVAILABLE_PATH" ] || { echo "No config to back up for $DOMAIN" >&2; exit 1; }
+    mkdir -p "$BACKUP_DIR"
+    cp -p "$AVAILABLE_PATH" "$BACKUP_DIR/$DOMAIN.$(date +%Y%m%dT%H%M%S)"
+    KEPT=0
+    for f in $(ls -1r "$BACKUP_DIR"); do
+      if is_snapshot_name "$f"; then
+        KEPT=$((KEPT + 1))
+        if [ "$KEPT" -gt "$BACKUP_KEEP" ]; then rm -f "$BACKUP_DIR/$f"; fi
+      fi
+    done
+    ;;
+  # Copies a backup back into sites-available. Node picks which one and passes
+  # its exact filename as $3.
+  restore-backup)
+    BACKUP_FILE="${3:?Usage: $0 restore-backup <domain> <backup_filename>}"
+    validate_archive_filename "$BACKUP_FILE"
+    SRC="$BACKUP_DIR/$BACKUP_FILE"
+    [ -f "$SRC" ] || { echo "No such backup: $BACKUP_FILE" >&2; exit 1; }
+    cp -p "$SRC" "$AVAILABLE_PATH"
     ;;
   *) usage ;;
 esac
