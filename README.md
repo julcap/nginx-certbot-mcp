@@ -16,7 +16,7 @@ script](#why-a-wrapper-script-instead-of-sudo-on-teelnrm) below).
 
 ## Tools
 
-All 25 are implemented and exercised against real infrastructure — see
+All 26 are implemented and exercised against real infrastructure — see
 [Testing](#testing).
 
 | Tool | Description |
@@ -27,6 +27,7 @@ All 25 are implemented and exercised against real infrastructure — see
 | `check_dns` | Resolve a domain (CNAME, then A/AAAA) against public resolvers |
 | `check_upstream_health` | TCP probe of an upstream `host:port` |
 | `get_nginx_status` | Whether nginx is running, plus its version |
+| `diagnose_site` | One-call health report for a domain: config, nginx, DNS, upstream, certificate, recent errors — with suggested next tools |
 | `tail_site_logs` | Tail access/error logs, capped at 1000 lines |
 | `list_archived_sites` | List configs archived by `delete_site` |
 | `list_site_backups` | List the automatic pre-change backups of site configs |
@@ -383,6 +384,31 @@ Or against the running Docker sandbox:
   }
 }
 ```
+
+## Diagnosing a site
+
+When a site misbehaves, start with `diagnose_site` instead of calling the
+individual checks one by one. It runs, in parallel, and reports each as
+`ok` / `warn` / `fail` / `skipped`:
+
+| Check | Looks at |
+|---|---|
+| `config` | config exists, is enabled, `server_name` matches, upstream and SSL parsed out |
+| `nginx` | service running, and `nginx -t` passes |
+| `dns` | the domain resolves (CNAME, then A/AAAA) |
+| `upstream` | the `proxy_pass` target accepts a TCP connection |
+| `certificate` | a certbot cert covers the domain (wildcards included), days left, and that the config actually uses it |
+| `recent_errors` | the latest nginx error-log lines mentioning the domain or its upstream |
+
+The result also has an overall `healthy` flag (no check failed — warnings
+and skipped checks don't count) and `next_steps`: the specific tools that
+would fix each problem, e.g. `create_domain_record` for a domain that
+doesn't resolve or `rollback_site` after a config that no longer passes
+`nginx -t`. A check that can't run (say, certbot isn't installed) is
+reported as `skipped` with the reason; it doesn't sink the rest.
+
+It is read-only, so it's available in `MCP_MODE=readonly`, and it respects
+`ALLOWED_DOMAINS`.
 
 ## Typical "add a new site" flow
 

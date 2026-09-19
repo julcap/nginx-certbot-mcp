@@ -21,6 +21,7 @@ import { deleteSite } from "./tools/deleteSite.js";
 import { restoreSite } from "./tools/restoreSite.js";
 import { rollbackSite } from "./tools/rollbackSite.js";
 import { listSiteBackups } from "./backups.js";
+import { diagnoseSite } from "./tools/diagnoseSite.js";
 import { pruneArchives } from "./tools/pruneArchives.js";
 import { reloadNginx } from "./tools/reloadNginx.js";
 import { issueCert } from "./tools/issueCert.js";
@@ -138,6 +139,7 @@ registerTool(
       certificates: z.array(
         z.object({
           domain: z.string(),
+          domains: z.array(z.string()).describe("Every name on the certificate, e.g. example.com and *.example.com"),
           expires_at: z.string().describe("Expiry date/time as reported by certbot"),
           days_remaining: z.number().int().describe("Negative if the certificate has already expired"),
           auto_renew_enabled: z.boolean(),
@@ -298,6 +300,66 @@ registerTool(
       content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
       structuredContent: { backups: result },
     };
+  }
+);
+
+const checkStatusShape = z.enum(["ok", "warn", "fail", "skipped"]);
+
+registerTool(
+  "diagnose_site",
+  {
+    description:
+      "One-call health report for a domain: whether its nginx config exists and is enabled, " +
+      "whether nginx is running and passes `nginx -t`, whether the domain resolves, whether the " +
+      "upstream accepts TCP connections, whether a certificate covers it (and how long is left), " +
+      "and recent nginx error-log lines mentioning the site or its upstream. Read-only. Returns " +
+      "per-check status (ok/warn/fail/skipped), an overall `healthy` flag, and `next_steps` naming " +
+      "the tools that would fix each problem. Start here when a site is misbehaving instead of " +
+      "calling the individual check_* tools one by one.",
+    inputSchema: {
+      domain: z.string().describe("Domain to diagnose, e.g. mysite.julcap.net"),
+    },
+    outputSchema: {
+      domain: z.string(),
+      healthy: z.boolean().describe("True when no check failed; warnings and skipped checks don't count"),
+      summary: z.string(),
+      checks: z.object({
+        config: z.object({
+          status: checkStatusShape, detail: z.string(),
+          enabled: z.boolean().optional(),
+          upstream: z.string().nullable().optional(),
+          ssl_enabled: z.boolean().optional(),
+        }),
+        nginx: z.object({
+          status: checkStatusShape, detail: z.string(),
+          running: z.boolean().optional(),
+          version: z.string().optional(),
+          config_test_passed: z.boolean().optional(),
+        }),
+        dns: z.object({
+          status: checkStatusShape, detail: z.string(),
+          record_type: z.string().optional(),
+          values: z.array(z.string()).optional(),
+        }),
+        upstream: z.object({ status: checkStatusShape, detail: z.string() }),
+        certificate: z.object({
+          status: checkStatusShape, detail: z.string(),
+          cert_name: z.string().optional(),
+          expires_at: z.string().optional(),
+          days_remaining: z.number().int().optional(),
+        }),
+        recent_errors: z.object({
+          status: checkStatusShape, detail: z.string(),
+          lines: z.array(z.string()).describe("Latest matching nginx error-log lines, oldest first"),
+        }),
+      }),
+      next_steps: z.array(z.string()).describe("Suggested tools/actions for each warning or failure; empty when all is well"),
+    },
+    annotations: { readOnlyHint: true, openWorldHint: true },
+  },
+  async ({ domain }) => {
+    const result = await diagnoseSite(domain);
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], structuredContent: result as unknown as Record<string, unknown> };
   }
 );
 

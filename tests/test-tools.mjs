@@ -38,7 +38,7 @@ const ENV_TEST_EXAMPLE = ".env.test.example";
 // Canonical order for the final report - matches src/index.ts registration.
 const ALL_TOOLS = [
   "list_sites", "get_site_config", "check_cert_expiry", "check_dns",
-  "check_upstream_health", "get_nginx_status", "tail_site_logs", "list_archived_sites", "list_site_backups",
+  "check_upstream_health", "get_nginx_status", "diagnose_site", "tail_site_logs", "list_archived_sites", "list_site_backups",
   "create_domain_record", "delete_domain_record", "create_txt_record", "delete_txt_record",
   "create_site", "update_site", "delete_site", "restore_site", "rollback_site", "prune_archives",
   "reload_nginx",
@@ -414,6 +414,9 @@ async function main() {
     const created = await step(client, "create_site", { domain: testSub, upstream_host: "127.0.0.1", upstream_port: 3000 }, (p) => p?.success === true);
     if (created.pass) {
       await step(client, "get_site_config", { domain: testSub }, (p) => p?.domain === testSub && typeof p?.raw_config === "string");
+      // The site was just created, so its config should be found and enabled;
+      // other checks (DNS, upstream, cert) depend on the environment.
+      await step(client, "diagnose_site", { domain: testSub }, (p) => (p?.checks?.config?.status === "ok" && typeof p?.healthy === "boolean") || "config check should be ok for a freshly created site");
       // Point it at a different upstream port and confirm the rewrite
       // actually landed in the config, not just that the tool reported success.
       const updated = await step(client, "update_site", { domain: testSub, upstream_host: "127.0.0.1", upstream_port: 3001 }, (p) => p?.success === true);
@@ -449,7 +452,7 @@ async function main() {
         report("prune_archives", "skip", "blocked by delete_site failure");
       }
     } else {
-      for (const t of ["get_site_config", "update_site", "list_site_backups", "rollback_site", "reload_nginx", "tail_site_logs", "delete_site", "restore_site", "prune_archives"]) {
+      for (const t of ["get_site_config", "diagnose_site", "update_site", "list_site_backups", "rollback_site", "reload_nginx", "tail_site_logs", "delete_site", "restore_site", "prune_archives"]) {
         report(t, "skip", "blocked by create_site failure");
       }
     }
