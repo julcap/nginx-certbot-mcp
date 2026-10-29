@@ -23,7 +23,7 @@
     "@aws-sdk/client-route-53": "^3.1132.0",
     "@modelcontextprotocol/sdk": "^1.32.0",
     "dotenv": "^17.4.2",
-    "zod": "^4.6.5"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/node": "^22.20.2",
